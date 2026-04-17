@@ -18,7 +18,7 @@ import { server } from '../../../test/setup';
 import {
   type JobStatus,
   useJobPolling,
-} from '../../../test/placeholders/useJobPolling';
+} from './useJobPolling';
 
 // Short poll interval for all tests — avoids wall-clock waits
 const TEST_INTERVAL_MS = 50;
