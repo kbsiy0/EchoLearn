@@ -39,10 +39,10 @@ Backend (FastAPI)
       subtitles.py         (GET /api/subtitles/{video_id})
       videos.py            (GET /api/videos)
     services/
-      pipeline.py          (orchestrator — audio → whisper → segment → translate → persist)
+      pipeline.py          (orchestrator — probe → audio → whisper → segment → translate → persist)
       transcription/
         whisper.py         (OpenAI whisper-1 client wrapper)
-        youtube_audio.py   (download audio to data/audio/*.mp3)
+        youtube_audio.py   (probe_metadata + download_audio; probe is metadata-only via yt-dlp --dump-json)
       translation/
         translator.py      (EN → ZH via gpt-4o-mini)
       alignment/
@@ -67,6 +67,12 @@ Storage
 - **Request thread** handles HTTP only; persistence via repositories; enqueues work by inserting a `jobs` row with status `queued` and submitting to the executor.
 - **Worker thread** (from the pool) runs `pipeline.run(job_id)` which updates progress via `jobs_repo.update_progress`.
 - **Database** is the only shared state; no module-level dicts, no background threads outside the pool.
+
+### Identifier safety
+`video_id` is always a YouTube canonical ID matching the regex `^[A-Za-z0-9_-]{11}$`. This regex is enforced at three layers:
+1. HTTP intake — `POST /api/subtitles/jobs` rejects non-matching IDs with `INVALID_URL`.
+2. Repository writes — every `jobs_repo` / `videos_repo` method that accepts `video_id` validates it before composing SQL or filesystem paths.
+3. Audio pipeline — `youtube_audio.download_audio` validates before composing any `Path`, preventing traversal into `data/audio/..`.
 
 ---
 
@@ -152,14 +158,16 @@ class VideoSummary(BaseModel):
 ### Progress ladder
 A job's `progress` field advances monotonically through these ranges:
 
-| Stage            | Range   |
-|------------------|---------|
-| queued           | 0       |
-| audio download   | 0–25    |
-| whisper          | 25–65   |
-| segmenter        | 65–70   |
-| translation      | 70–95   |
-| persist          | 95–100  |
+| Stage                                   | Range   |
+|-----------------------------------------|---------|
+| queued                                  | 0       |
+| probe metadata + audio download         | 0–25    |
+| whisper                                 | 25–65   |
+| segmenter                               | 65–70   |
+| translation (results held in memory)    | 70–95   |
+| atomic persist (upsert_video + insert_segments in one transaction) | 95–100  |
+
+**Atomic publish.** Translation results are never written to the DB as they arrive. The pipeline accumulates the full `list[Segment]` in memory; then, at the 95→100 step, a single SQLite transaction performs `upsert_video` followed by `insert_segments`. If any prior stage fails, no `videos` or `segments` rows exist. This is Option A (see Section 4) and is referenced as an invariant in `specs/pipeline.md` and `specs/data-layer.md`.
 
 ### API endpoints
 
@@ -194,8 +202,10 @@ for i, w in enumerate(words):
     duration = buffer[-1].end - buffer[0].start
     next_gap = words[i+1].start - w.end if i+1 < len(words) else None
 
+    # Strip trailing closing quotes (straight + curly, single + double) before the punctuation check
+    tail = w.text.rstrip().rstrip('"\u201D\u2019\'"')
     should_cut = (
-        (w.text.rstrip().endswith(('.', '!', '?')) and duration >= 3.0)
+        (tail.endswith(('.', '!', '?')) and duration >= 3.0)
         or (next_gap is not None and next_gap >= 0.7 and duration >= 3.0)
         or duration >= 15.0
     )
@@ -210,8 +220,16 @@ if buffer:
 `flush(buffer)` produces a segment where:
 - `start` = `buffer[0].start`
 - `end` = `buffer[-1].end`
-- `text_en` = `" ".join(w.text for w in buffer)` with whitespace normalized
-- `words` = verbatim list from buffer
+- `text_en` = result of the whitespace-normalization rule below
+- `words` = verbatim list from buffer (original `text` preserved for per-word display)
+
+**Whitespace normalization rule (exact).**
+1. For each word `w` in buffer: `token = w.text.strip()`.
+2. Drop `token` if it is the empty string.
+3. Join remaining tokens with a single ASCII space: `" ".join(tokens)`.
+4. Collapse any run of ≥ 2 spaces to exactly one (`re.sub(r" {2,}", " ", s)`).
+
+A fixture test case must include a real Whisper sample where tokens have leading spaces (e.g., `" world"`, `" ,"`) to lock this behavior.
 
 **Why this works.** Every sentence's start and end come from the same time base as its words — no stitching, no drift. The 15s hard cap guarantees termination on talks with no punctuation. The 3s minimum prevents false cuts on filler like "Yeah." "OK." in quick succession.
 
@@ -261,23 +279,28 @@ features/player/hooks/
   useKeyboardShortcuts.ts   (space=play/pause, ←/→ jump ±1 segment, R=replay segment)
 ```
 
+Auto-pause epsilon `0.08s` is carried over from the existing `useSubtitleSync`; revisit if p95 shifts post-RAF.
+
 Each hook owns a single concern; `PlayerPage` composes them.
 
 ---
 
 ## Section 4 — Errors and edges
 
+### Metadata probe precedes download
+The pipeline's first step is `probe_metadata(url)` (metadata-only, via `yt-dlp --dump-json` or equivalent), which returns `VideoMetadata(video_id, title, duration_sec, source)`. Duration is checked against `MAX_VIDEO_MINUTES` **before** any audio is downloaded. `VIDEO_UNAVAILABLE` and `VIDEO_TOO_LONG` are raised from probe, never from `download_audio`. This ordering prevents paying the bandwidth cost of downloading a video that will be rejected.
+
 ### Error codes
 
-| Code                | Retryable | When                                                 |
-|---------------------|-----------|------------------------------------------------------|
-| `INVALID_URL`       | no        | URL does not parse to a YouTube video ID             |
-| `VIDEO_UNAVAILABLE` | no        | Private, deleted, region-locked, age-gated           |
-| `VIDEO_TOO_LONG`    | no        | duration > `MAX_VIDEO_MINUTES`                       |
-| `FFMPEG_MISSING`    | no        | yt-dlp / audio extraction cannot run                 |
-| `WHISPER_ERROR`     | yes       | Whisper call failed OR returned no words             |
-| `TRANSLATION_ERROR` | yes       | Translation API call failed                          |
-| `INTERNAL_ERROR`    | yes       | Uncaught exception in pipeline                       |
+| Code                | Retryable | Raised by          | When                                                 |
+|---------------------|-----------|--------------------|------------------------------------------------------|
+| `INVALID_URL`       | no        | HTTP intake        | URL does not parse to a YouTube video ID, or `video_id` fails regex `^[A-Za-z0-9_-]{11}$` |
+| `VIDEO_UNAVAILABLE` | no        | `probe_metadata`   | Private, deleted, region-locked, age-gated (detected via metadata probe) |
+| `VIDEO_TOO_LONG`    | no        | `probe_metadata`   | `duration_sec / 60 > MAX_VIDEO_MINUTES` (detected before `download_audio` is ever invoked) |
+| `FFMPEG_MISSING`    | no        | `download_audio`   | yt-dlp / audio extraction cannot run                 |
+| `WHISPER_ERROR`     | yes       | Whisper / segmenter | Whisper call failed OR returned no words             |
+| `TRANSLATION_ERROR` | yes       | Translator         | Translation API call failed                          |
+| `INTERNAL_ERROR`    | yes       | Pipeline / runner  | Uncaught exception, or `processing` row swept at startup |
 
 `NO_CAPTIONS` is removed — captions are no longer a concept in Phase 0.
 
@@ -289,7 +312,7 @@ Each hook owns a single concern; `PlayerPage` composes them.
 - **Cache hit.** If a `videos` row exists, `POST` inserts a synthetic `completed` job and returns immediately.
 - **Audio cleanup.** Pipeline deletes its own `data/audio/{video_id}.mp3` on success AND failure. On app startup, a sweep removes any `data/audio/*.mp3` with no corresponding `processing` job.
 - **SQLite concurrency.** `PRAGMA journal_mode=WAL`, short transactions, `ThreadPoolExecutor(max_workers=2)`. A writer holds the lock only for the duration of a single UPDATE.
-- **Orphaned `processing` job on restart.** Startup hook flips any `status='processing'` row older than 60s to `status='failed'`, `error_code='INTERNAL_ERROR'`, `error_message='server restarted during processing'`. Client can resubmit.
+- **Orphaned `processing` job on restart.** Startup hook flips any `status='processing'` row older than the stale threshold to `status='failed'`, `error_code='INTERNAL_ERROR'`, `error_message='server restarted during processing'`. The threshold is a runner constructor argument (default 60s in production, overridable to e.g. `0.1s` in tests). Client can resubmit.
 
 ---
 
@@ -335,8 +358,9 @@ Every frontend-affecting task in `tasks.md` must include "dispatch ui-verifier" 
 - pytest + vitest + lint + production build all green
 - ui-verifier reports PASS with sentence p95 ≤ 100ms, word p95 ≤ 150ms
 - `backend/app/routers/subtitles.py` < 150 lines; `frontend/src/App.tsx` < 150 lines
-- Backend restart does not lose in-flight jobs (SQLite persistence verified by integration test)
+- Backend restart does not lose job *records*: `processing` jobs stale for ≥ threshold transition to `failed` with `INTERNAL_ERROR: server restarted during processing` (SQLite persistence verified by integration test)
 - 3-minute video processed end-to-end in ≤ 60s
+- Global 200-line rule enforced across `backend/app/` and `frontend/src/` (no single `.py`/`.ts`/`.tsx` exceeds 200 lines)
 
 ---
 

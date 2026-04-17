@@ -32,16 +32,24 @@ def update_status(
 def get(job_id: str) -> Optional[JobStatus]: ...
 def find_active_for_video(video_id: str) -> Optional[JobStatus]: ...
 #   returns the most recent job for the video whose status is queued or processing
-def sweep_stuck_processing(older_than_sec: int) -> int: ...
+def sweep_stuck_processing(older_than_sec: float) -> int: ...
 #   marks long-running processing rows as failed with INTERNAL_ERROR; returns count swept
+#   older_than_sec is a parameter (not a hard-coded 60) so tests can use small thresholds
 ```
 
 ### Videos repository
 ```python
 # backend/app/repositories/videos_repo.py
-def upsert_video(video_id: str, title: str, duration_sec: float, source: str) -> None: ...
-def insert_segments(video_id: str, segments: list[Segment]) -> None: ...
-#   atomically replaces all existing segments for the video
+def publish_video(
+    video_id: str,
+    title: str,
+    duration_sec: float,
+    source: str,
+    segments: list[Segment],
+) -> None: ...
+#   ATOMIC: upsert of the videos row + insert of all segments rows, in a single SQLite transaction.
+#   This is the ONLY sanctioned way for the pipeline to make a video observable.
+
 def get_video(video_id: str) -> Optional[VideoSummary]: ...
 def list_videos() -> list[VideoSummary]: ...
 #   ordered by created_at DESC
@@ -51,10 +59,11 @@ def get_segments(video_id: str) -> list[Segment]: ...
 
 ## Invariants
 - **WAL mode always.** `get_connection()` is the only code path that opens a connection; both routers and the pipeline go through it.
-- **Progress is only advanced, never regressed.** `update_progress` is a monotonic operation; an attempt to lower progress is a no-op (enforced at repository level).
-- **Segments are atomic.** `insert_segments` runs inside a single transaction. A half-populated segment set is not observable.
-- **Videos + segments delete together.** `ON DELETE CASCADE` on `segments.video_id` guarantees reprocessing wipes the old segments.
+- **Progress monotonic + surfacing.** `update_progress` never lowers progress. In test mode (fixture flag `EL_TEST_STRICT=1`), a lowering attempt raises `AssertionError` so bugs surface loudly. In production it logs a WARN and becomes a no-op. T02 acceptance verifies both paths.
+- **Atomic publish (Option A).** `publish_video` is a single SQLite transaction that either writes the `videos` row and all `segments` rows, or writes neither. No partial state is observable at any intermediate point. Routers and pipeline MUST NOT bypass `publish_video` to write `videos` or `segments` independently.
+- **Reprocess cleanly.** `publish_video` replaces any existing segments for the `video_id` as part of its transaction (explicit `DELETE FROM segments WHERE video_id = ?` followed by inserts, all inside the same transaction).
 - **No foreign data format.** JSON cache files are not read or written by any repository method. The only persistent store is the DB.
+- **`video_id` safety.** Every write method validates `video_id` against `^[A-Za-z0-9_-]{11}$` before issuing SQL. Malformed IDs raise at the repo layer; they never reach SQL. Tested in T03.
 
 ## Non-goals
 - Full-text search across subtitles (Phase 1+).

@@ -5,6 +5,9 @@
 - Keep `App.tsx` as a thin composition root (< 150 lines) — routing only, no domain logic.
 - Host the directory layout under which future Phase 1+ features will slot in (`features/player/`, `features/jobs/`).
 
+## Dependencies
+- `react-router-dom@^6.x` (pinned in `frontend/package.json` by T06).
+
 ## Public interfaces
 
 ### Routes

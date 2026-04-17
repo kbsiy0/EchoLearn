@@ -126,7 +126,7 @@ Phase 0 開始採 SDD（Spec-Driven Development）+ 5 個 agent：
 - [ ] `frontend/` `npm run lint && npm run build && npx vitest run` 綠燈
 - [ ] ui-verifier 報告：golden path 全 PASS、sync p95 ≤ 100ms / 150ms
 - [ ] `subtitles.py` 及 `App.tsx` 皆 < 150 行
-- [ ] 後端重啟後進行中的 job 仍可查詢（SQLite 持久化驗證）
+- [ ] 後端重啟不會遺失 job 紀錄：`processing` 狀態超過 stale threshold 的 job 會被轉為 `failed`（`error_code=INTERNAL_ERROR`、`error_message='server restarted during processing'`），絕不會永遠卡在 `processing`（SQLite 持久化驗證）
 - [ ] 3 分鐘影片 end-to-end ≤ 60 秒
 
 ## 已知陷阱

@@ -50,5 +50,5 @@ The following items are intentionally **not** part of Phase 0 and must not be ad
 - pytest, vitest, lint, and production build all green
 - ui-verifier reports PASS with sentence p95 ≤ 100ms, word p95 ≤ 150ms
 - `backend/app/routers/subtitles.py` < 150 lines; `frontend/src/App.tsx` < 150 lines
-- Backend restart does not lose in-flight jobs (SQLite persistence verified)
+- Backend restart does not lose job *records*: `processing` jobs stale for ≥ threshold are transitioned to `failed` with `INTERNAL_ERROR: server restarted during processing`, not orphaned as perpetually `processing` (SQLite persistence verified)
 - 3-minute video processed end-to-end in ≤ 60s
