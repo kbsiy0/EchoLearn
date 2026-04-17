@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler as _default_http_handler
+from fastapi.exceptions import HTTPException as FastAPIHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -34,15 +36,17 @@ app.include_router(subtitles_router.router)
 app.include_router(videos_router.router)
 
 
-from fastapi.exceptions import HTTPException as FastAPIHTTPException  # noqa: E402
-
-
 @app.exception_handler(FastAPIHTTPException)
 async def http_exception_handler(request: Request, exc: FastAPIHTTPException):
-    """Flatten structured detail dicts to top-level response body."""
+    """Flatten structured detail dicts to top-level response body.
+
+    Only intercepts dict-detail exceptions (structured errors from our routers).
+    String-detail exceptions (FastAPI built-ins like 404/405/422) are delegated
+    to FastAPI's default handler to avoid silent divergence on future upgrades.
+    """
     if isinstance(exc.detail, dict):
         return JSONResponse(status_code=exc.status_code, content=exc.detail)
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return await _default_http_handler(request, exc)
 
 
 @app.get("/")

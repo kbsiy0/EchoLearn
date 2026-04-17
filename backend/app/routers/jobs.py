@@ -95,10 +95,13 @@ def create_job(body: CreateJobBody, conn: DbConn, runner: Runner):
     jobs_repo = JobsRepo(conn)
     videos_repo = VideosRepo(conn)
 
-    # 2. Cache hit: video already fully processed → synthetic completed job
+    # 2. Cache hit: video already fully processed → insert synthetic completed job
     video_row = videos_repo.get_video(video_id)
     if video_row is not None:
         synthetic_id = str(uuid.uuid4())
+        jobs_repo.create(synthetic_id, video_id)
+        jobs_repo.update_status(synthetic_id, "completed")
+        jobs_repo.update_progress(synthetic_id, 100)
         return JobStatus(
             job_id=synthetic_id,
             video_id=video_id,

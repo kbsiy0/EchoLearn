@@ -29,9 +29,18 @@ DbConn = Annotated[sqlite3.Connection, Depends(get_db_conn)]
 def get_subtitles(video_id: str, conn: DbConn) -> SubtitleResponse:
     """Return subtitle data for a completed video."""
     repo = VideosRepo(conn)
-    video_row = repo.get_video(video_id)
+    try:
+        video_row = repo.get_video(video_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "NOT_FOUND", "error_message": "subtitle not found"},
+        )
     if video_row is None:
-        raise HTTPException(status_code=404, detail="Subtitles not found")
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "NOT_FOUND", "error_message": "subtitle not found"},
+        )
 
     segment_rows = repo.get_segments(video_id)
     segments = [

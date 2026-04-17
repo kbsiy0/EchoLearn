@@ -265,3 +265,64 @@ def test_cors_preserved():
         )
     assert resp.status_code in (200, 204)
     assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+# ---------------------------------------------------------------------------
+# Tests: C1/C2 — malformed video_id must return 404 (not 500)
+# ---------------------------------------------------------------------------
+
+def test_malformed_video_id_returns_404(subtitles_client: TestClient):
+    """video_id shorter than 11 chars triggers repo ValueError — must surface as 404."""
+    resp = subtitles_client.get("/api/subtitles/badId")
+    assert resp.status_code == 404
+    data = resp.json()
+    assert data.get("error_code") == "NOT_FOUND"
+
+
+def test_malformed_video_id_too_long_returns_404(subtitles_client: TestClient):
+    """video_id longer than 11 chars triggers repo ValueError — must surface as 404."""
+    resp = subtitles_client.get("/api/subtitles/someVideoIdX")
+    assert resp.status_code == 404
+    data = resp.json()
+    assert data.get("error_code") == "NOT_FOUND"
+
+
+def test_valid_but_unknown_video_id_returns_404(subtitles_client: TestClient):
+    """11-char regex-valid video_id not in DB → 404 with same flat body shape."""
+    resp = subtitles_client.get(f"/api/subtitles/{VIDEO_ID}")
+    assert resp.status_code == 404
+    data = resp.json()
+    assert data.get("error_code") == "NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# Tests: M1 — cache-hit synthetic job must be pollable via GET /jobs/{job_id}
+# ---------------------------------------------------------------------------
+
+def test_cache_hit_returns_pollable_job(
+    client: TestClient,
+    db_conn: sqlite3.Connection,
+    fake_runner: FakeRunner,
+):
+    """POST cache-hit → job_id → GET /jobs/{job_id} must return 200 status=completed."""
+    videos_repo = VideosRepo(db_conn)
+    videos_repo.publish_video(
+        video_id=VIDEO_ID,
+        title="Rick Astley",
+        duration_sec=213.0,
+        source="whisper",
+        segments=[],
+    )
+
+    # Trigger cache-hit path
+    post_resp = client.post("/api/subtitles/jobs", json={"url": VALID_URL})
+    assert post_resp.status_code == 200
+    job_id = post_resp.json()["job_id"]
+
+    # Poll the returned job_id — must be persisted
+    get_resp = client.get(f"/api/subtitles/jobs/{job_id}")
+    assert get_resp.status_code == 200
+    data = get_resp.json()
+    assert data["job_id"] == job_id
+    assert data["status"] == "completed"
+    assert data["progress"] == 100
