@@ -16,12 +16,12 @@ const PLAYER_CONTAINER_ID = 'yt-player';
 /** Adapt API response shape to hook-internal Segment shape. */
 function toSegments(apiSegments: SubtitleSegment[]): Segment[] {
   return apiSegments.map((s) => ({
-    idx: s.index,
+    idx: s.idx,
     start: s.start,
     end: s.end,
     text_en: s.text_en,
     text_zh: s.text_zh,
-    words: s.words.map((w) => ({ text: w.word, start: w.start, end: w.end })),
+    words: s.words.map((w) => ({ text: w.text, start: w.start, end: w.end })),
   }));
 }
 
@@ -120,14 +120,7 @@ export function PlayerPage() {
           </h2>
           <div className="flex-1 overflow-hidden">
             <SubtitlePanel
-              segments={segments.map((s, i) => ({
-                index: i,
-                start: s.start,
-                end: s.end,
-                text_en: s.text_en,
-                text_zh: s.text_zh,
-                words: s.words.map((w) => ({ word: w.text, start: w.start, end: w.end })),
-              }))}
+              segments={segments}
               currentIndex={currentIndex}
               currentWordIndex={currentWordIndex}
               onClickSegment={handleClickSegment}

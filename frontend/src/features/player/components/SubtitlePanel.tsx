@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
-import type { SubtitleSegment } from '../../../types/subtitle';
+import type { Segment } from '../hooks/useSubtitleSync';
 import { SubtitleLine } from './SubtitleLine';
 
 interface SubtitlePanelProps {
-  segments: SubtitleSegment[];
+  segments: Segment[];
   currentIndex: number;
   currentWordIndex: number;
   onClickSegment: (index: number) => void;
@@ -29,7 +29,7 @@ export function SubtitlePanel({ segments, currentIndex, currentWordIndex, onClic
   return (
     <div ref={containerRef} className="h-full overflow-y-auto space-y-1 pr-2">
       {segments.map((segment, idx) => (
-        <div key={segment.index} ref={idx === currentIndex ? activeRef : undefined}>
+        <div key={segment.idx} ref={idx === currentIndex ? activeRef : undefined}>
           <SubtitleLine
             segment={segment}
             isActive={idx === currentIndex}
