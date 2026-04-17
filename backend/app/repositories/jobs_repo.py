@@ -3,10 +3,11 @@
 All write methods validate `video_id` against the YouTube canonical regex
 before issuing any SQL.  Progress is monotonic: never decreases.
 
-Thread safety: a per-instance Lock serializes writes when multiple threads
-share the same connection (e.g., unit tests with in-memory SQLite).
-Production code opens one connection per worker thread, so lock contention
-is effectively zero in steady state.
+Thread safety: progress monotonicity is enforced via SQL-level conditional
+UPDATE (WHERE progress <= ?) so SQLite's own locking guarantees atomicity
+even across multiple JobsRepo instances sharing the same connection.
+Other writes use a per-instance Lock to serialise access on a shared
+in-memory connection (unit tests).
 """
 
 import logging
@@ -61,18 +62,21 @@ class JobsRepo:
     def update_progress(self, job_id: str, progress: int) -> None:
         """Advance progress — monotonic: highest value wins.
 
-        In strict mode (EL_TEST_STRICT=1): lowering raises AssertionError.
-        In production mode: lowering is a no-op and emits a WARN log.
+        Uses a SQL-level conditional UPDATE (WHERE progress <= ?) so the
+        monotonicity guarantee holds even when multiple JobsRepo instances
+        share the same SQLite connection.
 
-        The read-then-write is protected by a lock so concurrent callers
-        on the same connection see a consistent current value.
+        In strict mode (EL_TEST_STRICT=1): if progress would decrease,
+        raises AssertionError *before* issuing any SQL.
+        In production mode: a lower value is silently ignored (no-op + WARN).
         """
+        strict = os.environ.get("EL_TEST_STRICT") == "1"
+
         with self._lock:
             current = self._get_unlocked(job_id)
             current_progress = current["progress"] if current else 0
 
             if progress < current_progress:
-                strict = os.environ.get("EL_TEST_STRICT") == "1"
                 if strict:
                     raise AssertionError(
                         f"update_progress regression: tried to lower {job_id} "
@@ -84,11 +88,23 @@ class JobsRepo:
                 )
                 return
 
-            self._conn.execute(
-                "UPDATE jobs SET progress=?, updated_at=? WHERE job_id=?",
-                (progress, _now(), job_id),
+            # SQL-level conditional UPDATE: only writes if stored progress is
+            # still <= the value we intend to set.  Atomicity is guaranteed
+            # by SQLite; the lock covers the entire read-decide-write cycle so
+            # threads sharing one connection don't interleave transactions.
+            cursor = self._conn.execute(
+                "UPDATE jobs SET progress=?, updated_at=?"
+                " WHERE job_id=? AND progress<=?",
+                (progress, _now(), job_id, progress),
             )
             self._conn.commit()
+
+        if cursor.rowcount == 0:
+            logger.warning(
+                "update_progress conditional no-op (concurrent write beat us): "
+                "%s tried %d but DB already has higher value",
+                job_id, progress,
+            )
 
     def update_status(
         self,

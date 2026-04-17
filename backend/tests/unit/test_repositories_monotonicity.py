@@ -161,3 +161,50 @@ class TestProgressMonotonicityMultiThread:
         assert not errors, f"Errors in production mode: {errors}"
         final = repo.get(jid)["progress"]
         assert final == 80, f"Expected 80, got {final}"
+
+
+# ---------------------------------------------------------------------------
+# T02 M1: Cross-instance monotonicity (two distinct JobsRepo instances)
+# ---------------------------------------------------------------------------
+
+class TestCrossInstanceMonotonicity:
+    def test_two_distinct_instances_max_wins(self, db_conn, monkeypatch):
+        """Two *different* JobsRepo instances sharing the same connection cannot
+        lower progress — the highest attempted value must win.
+
+        This is the T02 M1 regression: a per-instance threading.Lock cannot
+        protect against races between separate instances.  The fix uses a
+        SQL-level conditional UPDATE (WHERE progress <= ?) so atomicity is
+        delegated to SQLite.
+        """
+        monkeypatch.delenv("EL_TEST_STRICT", raising=False)
+        repo_a = _make_repo(db_conn)
+        repo_b = _make_repo(db_conn)  # distinct instance, same conn
+        jid = "jobCrossInst01"
+        repo_a.create(jid, VIDEO_ID)
+
+        barrier = threading.Barrier(2)
+        errors: list = []
+
+        def writer_a():
+            try:
+                barrier.wait()
+                repo_a.update_progress(jid, 30)
+            except Exception as e:
+                errors.append(("a", e))
+
+        def writer_b():
+            try:
+                barrier.wait()
+                repo_b.update_progress(jid, 80)
+            except Exception as e:
+                errors.append(("b", e))
+
+        t1 = threading.Thread(target=writer_a)
+        t2 = threading.Thread(target=writer_b)
+        t1.start(); t2.start()
+        t1.join(timeout=1.0); t2.join(timeout=1.0)
+
+        assert not errors, f"Cross-instance errors: {errors}"
+        final = repo_a.get(jid)["progress"]
+        assert final == 80, f"Expected 80 (max attempted), got {final}"
