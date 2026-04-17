@@ -1,0 +1,9 @@
+[
+  {"text": "THIS", "start": 0.0, "end": 0.3},
+  {"text": "IS", "start": 0.3, "end": 0.5},
+  {"text": "ALL", "start": 0.5, "end": 0.7},
+  {"text": "CAPS", "start": 0.7, "end": 1.0},
+  {"text": "WITH", "start": 1.0, "end": 1.2},
+  {"text": "NO", "start": 1.2, "end": 1.4},
+  {"text": "PUNCTUATION", "start": 1.4, "end": 2.0}
+]

@@ -1,0 +1,10 @@
+[
+  {"text": "Hello", "start": 0.0, "end": 0.4},
+  {"text": "world,", "start": 0.4, "end": 0.8},
+  {"text": "how", "start": 0.8, "end": 1.0},
+  {"text": "are", "start": 1.0, "end": 1.2},
+  {"text": "you?", "start": 1.2, "end": 1.6},
+  {"text": "I", "start": 2.0, "end": 2.2},
+  {"text": "am", "start": 2.2, "end": 2.4},
+  {"text": "fine.", "start": 2.4, "end": 2.8}
+]
