@@ -1,6 +1,6 @@
 import pytest
 
-from app.routers.subtitles import normalize_segments, estimate_word_timings
+from app.services.alignment.word_timing import normalize_segments, estimate_word_timings
 
 
 class TestNormalizeSegments:
