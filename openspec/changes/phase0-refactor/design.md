@@ -81,7 +81,7 @@ Storage
 ### SQLite schema
 
 ```sql
-CREATE TABLE jobs (
+CREATE TABLE IF NOT EXISTS jobs (
   job_id TEXT PRIMARY KEY,
   video_id TEXT NOT NULL,
   status TEXT CHECK(status IN ('queued','processing','completed','failed')),
@@ -91,9 +91,9 @@ CREATE TABLE jobs (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-CREATE INDEX idx_jobs_video ON jobs(video_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_video ON jobs(video_id);
 
-CREATE TABLE videos (
+CREATE TABLE IF NOT EXISTS videos (
   video_id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   duration_sec REAL NOT NULL,
@@ -101,7 +101,7 @@ CREATE TABLE videos (
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE segments (
+CREATE TABLE IF NOT EXISTS segments (
   video_id TEXT REFERENCES videos(video_id) ON DELETE CASCADE,
   idx INTEGER NOT NULL,
   start_sec REAL NOT NULL,
