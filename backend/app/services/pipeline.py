@@ -106,7 +106,10 @@ class Pipeline:
             self._jobs.update_progress(job_id, 15)
 
             # Stage 3: whisper transcription → 45%
-            words = self._whisper.transcribe(audio_path)
+            try:
+                words = self._whisper.transcribe(audio_path)
+            except Exception as exc:
+                raise PipelineError("WHISPER_ERROR", str(exc)) from exc
             self._jobs.update_progress(job_id, 45)
 
             # Stage 4: segmentation → 90%
@@ -115,7 +118,10 @@ class Pipeline:
 
             # Stage 5: translation → 95% (results held in memory)
             texts_en = [s["text_en"] for s in segments]
-            texts_zh = self._translator.translate_batch(texts_en)
+            try:
+                texts_zh = self._translator.translate_batch(texts_en)
+            except Exception as exc:
+                raise PipelineError("TRANSLATION_ERROR", str(exc)) from exc
             for i, seg in enumerate(segments):
                 seg["text_zh"] = texts_zh[i] if i < len(texts_zh) else ""
             self._jobs.update_progress(job_id, 95)

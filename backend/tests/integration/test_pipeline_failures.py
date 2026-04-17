@@ -64,6 +64,7 @@ def test_audio_deleted_on_whisper_failure(db_conn, tmp_path):
     assert not audio.exists(), "audio file must be deleted even on whisper failure"
     job = JobsRepo(db_conn).get(job_id)
     assert job["status"] == "failed"
+    assert job["error_code"] == "WHISPER_ERROR"
 
 
 def test_audio_deleted_on_translation_failure(db_conn, tmp_path):
@@ -74,7 +75,7 @@ def test_audio_deleted_on_translation_failure(db_conn, tmp_path):
 
     whisper = FakeWhisperClient(words=WORDS)
     translator = FakeTranslator(
-        mapping=PipelineError("TRANSLATION_ERROR", "translation API failed")
+        mapping=RuntimeError("translation API failed")
     )
 
     job_id = _create_job(db_conn)
