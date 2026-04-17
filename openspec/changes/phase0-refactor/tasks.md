@@ -33,6 +33,7 @@ Legend:
   - `useJobPolling.test.ts` — fixed-interval polling, terminal-state stop, cancel-on-unmount
   - `useYouTubePlayer.test.ts` — IFrame API lifecycle (load/create/destroy) via mock
   - `useSubtitleSync.test.ts` — binary-search boundary cases
+- **Placeholder implementations** are created under `frontend/src/test/placeholders/` for each hook (`useJobPolling.ts`, `useYouTubePlayer.ts`, `useSubtitleSync.ts`), exporting the same type signatures as their eventual real counterparts so tests compile. A build-time check (ESLint `no-restricted-imports` rule OR a simple CI grep script) fails if `src/test/placeholders/` is imported from any file outside `src/test/`. Test names or rule names referenced here are verified by T01 itself.
 - `npm run test -- --run` exits 0 with tests passing.
 - Tasks T02–T09 can `import` fakes/fixtures without modification.
 
@@ -71,7 +72,8 @@ Legend:
 - All write methods validate `video_id` against `^[A-Za-z0-9_-]{11}$` and raise on mismatch.
 - `tests/unit/test_repositories.py` covers:
   - Every public method happy path.
-  - **Progress monotonicity (a):** two threads call `update_progress(same_job_id, interleaved_values)` → final stored progress equals `max(values_attempted)` (highest wins). Under `EL_TEST_STRICT=1`, attempts to lower progress raise `AssertionError`.
+  - **Progress monotonicity (a):** two threads call `update_progress(same_job_id, interleaved_values)` → final stored progress equals `max(values_attempted)` (highest wins). Under `EL_TEST_STRICT=1`, attempts to lower progress raise `AssertionError` (test name: `test_update_progress_lowering_raises_in_strict_mode`).
+  - **Progress monotonicity — production mode:** with `EL_TEST_STRICT` unset, a lowering attempt on `update_progress` is a no-op (stored progress unchanged) AND emits a WARN log capturable via pytest `caplog` fixture. Test name: `test_update_progress_lowering_logs_warn_in_production_mode`.
   - **WAL concurrency (b):** two threads call `update_progress(different_job_ids)` → both complete within 200ms.
   - **Atomic publish:** simulated translation failure between probe and persist leaves no `videos` row and no `segments` rows.
   - **`video_id` regex enforcement at repo layer:** malformed IDs (`"short"`, `"has/slash..."`, empty) raise before any SQL executes.
@@ -204,6 +206,7 @@ Legend:
 - Components relocated under `frontend/src/features/player/components/` and `frontend/src/features/jobs/components/` — behavior unchanged from user's perspective.
 - Existing hooks move (not rewritten) under `frontend/src/features/player/hooks/` and `frontend/src/features/jobs/hooks/`.
 - **`useJobPolling` is CREATED in this task** (extracted from `App.tsx`'s inline polling), matching the contract in `specs/jobs-api.md` "Frontend consumer" section. Tests authored in T01 now pass against the real hook.
+- **Placeholder deletion.** `frontend/src/test/placeholders/useJobPolling.ts` is deleted as part of this task. Vitest runs exercise only the real implementation; the build-time placeholder-import guard continues to pass.
 - Vitest suites (authored in T01) continue to pass with real implementations replacing any placeholder mocks; lint clean; `npm run build` succeeds.
 - **ui-verifier dispatched — golden-path PASS required.** Smoke flow (URL → processed video → playback → navigate to HomePage history list) must return PASS. Timing p95 measurement is informational at this task only — the p95 gate is asserted in T07. Report: `docs/ui-verification/T06.md`.
 
@@ -240,6 +243,7 @@ Legend:
 - `useKeyboardShortcuts` binds space (play/pause), ←/→ (jump ±1 segment), R (replay current segment from its start).
 - Vitest: `useSubtitleSync.test.ts` asserts binary search boundaries and that `setState` is not called when indices don't change across many raf ticks.
 - **ui-verifier dispatched on real dev servers, produces report at `docs/ui-verification/T07.md` with sentence p95 ≤ 100ms AND word p95 ≤ 150ms.** Task cannot be marked done without this report.
+- **Placeholder deletion.** `frontend/src/test/placeholders/useYouTubePlayer.ts` and `frontend/src/test/placeholders/useSubtitleSync.ts` are deleted as part of this task. After T07, `frontend/src/test/placeholders/` contains no hook files. Build-time placeholder-import guard continues to pass.
 - `App.tsx` line count verified < 150.
 
 **Files expected to touch**

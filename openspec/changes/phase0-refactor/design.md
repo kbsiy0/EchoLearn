@@ -165,9 +165,9 @@ A job's `progress` field advances monotonically through these ranges:
 | whisper                                 | 25–65   |
 | segmenter                               | 65–70   |
 | translation (results held in memory)    | 70–95   |
-| atomic persist (upsert_video + insert_segments in one transaction) | 95–100  |
+| atomic persist (`publish_video(...)` — upsert + segments insert in one transaction) | 95–100  |
 
-**Atomic publish.** Translation results are never written to the DB as they arrive. The pipeline accumulates the full `list[Segment]` in memory; then, at the 95→100 step, a single SQLite transaction performs `upsert_video` followed by `insert_segments`. If any prior stage fails, no `videos` or `segments` rows exist. This is Option A (see Section 4) and is referenced as an invariant in `specs/pipeline.md` and `specs/data-layer.md`.
+**Atomic publish.** Translation results are never written to the DB as they arrive. The pipeline accumulates the full `list[Segment]` in memory; then, at the 95→100 step, a single call to `publish_video(...)` performs an upsert on the `videos` row followed by insert of all `segments` rows, all within one SQLite transaction. If any prior stage fails, no `videos` or `segments` rows exist. This is Option A (see Section 4) and is referenced as an invariant in `specs/pipeline.md` and `specs/data-layer.md`. Readers who want internals see `specs/data-layer.md`.
 
 ### API endpoints
 
@@ -294,7 +294,7 @@ The pipeline's first step is `probe_metadata(url)` (metadata-only, via `yt-dlp -
 
 | Code                | Retryable | Raised by          | When                                                 |
 |---------------------|-----------|--------------------|------------------------------------------------------|
-| `INVALID_URL`       | no        | HTTP intake        | URL does not parse to a YouTube video ID, or `video_id` fails regex `^[A-Za-z0-9_-]{11}$` |
+| `INVALID_URL`       | no        | HTTP intake (regex shape) OR `probe_metadata` (yt-dlp cannot parse URL as a YouTube video) | URL does not parse to a YouTube video ID, or `video_id` fails regex `^[A-Za-z0-9_-]{11}$`, or probe cannot parse the URL |
 | `VIDEO_UNAVAILABLE` | no        | `probe_metadata`   | Private, deleted, region-locked, age-gated (detected via metadata probe) |
 | `VIDEO_TOO_LONG`    | no        | `probe_metadata`   | `duration_sec / 60 > MAX_VIDEO_MINUTES` (detected before `download_audio` is ever invoked) |
 | `FFMPEG_MISSING`    | no        | `download_audio`   | yt-dlp / audio extraction cannot run                 |
@@ -303,6 +303,8 @@ The pipeline's first step is `probe_metadata(url)` (metadata-only, via `yt-dlp -
 | `INTERNAL_ERROR`    | yes       | Pipeline / runner  | Uncaught exception, or `processing` row swept at startup |
 
 `NO_CAPTIONS` is removed — captions are no longer a concept in Phase 0.
+
+**Precedence.** If `probe_metadata` cannot retrieve metadata at all (private, deleted, geo-blocked, or unparseable URL), raise `VIDEO_UNAVAILABLE` / `INVALID_URL` as appropriate. `VIDEO_TOO_LONG` is only reachable when probe successfully returns a `VideoMetadata` whose `duration_sec` exceeds `MAX_VIDEO_MINUTES * 60`. In particular, a private-and-too-long video always surfaces as `VIDEO_UNAVAILABLE` because probe never gets as far as reading duration.
 
 ### Edge cases
 

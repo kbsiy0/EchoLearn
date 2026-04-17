@@ -80,6 +80,15 @@ MSW handlers are defined per test; there are no default handlers in `setup.ts` b
 - Invocation: tasks that affect frontend behavior dispatch ui-verifier as a completion gate.
 - Output: `docs/ui-verification/<task-id>.md` with PASS/FAIL + raw p95 numbers.
 
+### Placeholder discipline
+T01 authors real test cases, but the hooks under test do not yet have production implementations. Placeholders MUST live in `frontend/src/test/placeholders/` and MUST NOT be imported from any production code path. Each placeholder exports the same type signature as its eventual real counterpart so tests compile.
+
+- `frontend/src/test/placeholders/useJobPolling.ts`, `useYouTubePlayer.ts`, `useSubtitleSync.ts` ship with T01.
+- T01 also adds a build-time guard (ESLint `no-restricted-imports` rule or a CI grep) that fails if any file outside `frontend/src/test/` imports from `frontend/src/test/placeholders/`.
+- When T06 creates `useJobPolling` for real, the corresponding placeholder MUST be deleted as part of the same task.
+- When T07 rewrites `useYouTubePlayer` and `useSubtitleSync`, their placeholders MUST be deleted as part of the same task.
+- After T07, `frontend/src/test/placeholders/` contains no hook files.
+
 ## Invariants
 - **T01 comes first AND ships real tests.** At minimum one real test per hook that T06 will move: `useJobPolling` (interval + terminal-stop), `useYouTubePlayer` (lifecycle mock), `useSubtitleSync` (binary-search boundaries). No production code of this change lands before this capability is in place.
 - **Fakes mirror real signatures.** If a fake's method signature drifts from the real client's, both are wrong; `test_fake_signatures.py` enforces the match via `inspect.signature` diff.
