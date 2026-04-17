@@ -1,65 +1,42 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadYouTubeAPI } from '../../../lib/youtube';
 
-interface UseYouTubePlayerReturn {
+export interface UseYouTubePlayerReturn {
   player: YT.Player | null;
   isReady: boolean;
-  currentTime: number;
   playerState: number;
   seekTo: (seconds: number) => void;
   playVideo: () => void;
   pauseVideo: () => void;
 }
 
+/**
+ * Manages the YouTube IFrame API lifecycle only.
+ * - Creates/destroys player when videoId changes.
+ * - Exposes player instance + isReady + playerState.
+ * - Does NOT do any subtitle or time-tracking logic.
+ *
+ * Signature per specs/sync.md:
+ *   useYouTubePlayer(videoId, containerId) → { player, isReady, playerState, seekTo, playVideo, pauseVideo }
+ */
 export function useYouTubePlayer(
   videoId: string | null,
-  containerId: string
+  containerId: string,
 ): UseYouTubePlayerReturn {
-  const playerRef = useRef<YT.Player | null>(null);
+  const [player, setPlayer] = useState<YT.Player | null>(null);
   const [isReady, setIsReady] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
   const [playerState, setPlayerState] = useState(-1);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const destroyRef = useRef<(() => void) | null>(null);
 
-  // Create / destroy player when videoId changes
   useEffect(() => {
     if (!videoId) return;
 
     let destroyed = false;
 
-    const createPlayer = async () => {
-      await loadYouTubeAPI();
+    const initPlayer = () => {
       if (destroyed) return;
 
-      // Destroy previous player
-      if (playerRef.current) {
-        playerRef.current.destroy();
-        playerRef.current = null;
-      }
-
-      // Wait for container element to appear in DOM
-      const waitForContainer = (): Promise<HTMLElement> => {
-        return new Promise((resolve) => {
-          const el = document.getElementById(containerId);
-          if (el) {
-            resolve(el);
-            return;
-          }
-          const observer = new MutationObserver(() => {
-            const el = document.getElementById(containerId);
-            if (el) {
-              observer.disconnect();
-              resolve(el);
-            }
-          });
-          observer.observe(document.body, { childList: true, subtree: true });
-        });
-      };
-
-      await waitForContainer();
-      if (destroyed) return;
-
-      playerRef.current = new YT.Player(containerId, {
+      const p = new YT.Player(containerId, {
         videoId,
         playerVars: {
           autoplay: 0,
@@ -77,67 +54,47 @@ export function useYouTubePlayer(
           },
         },
       });
+
+      if (!destroyed) {
+        setPlayer(p);
+        destroyRef.current = () => p.destroy();
+      }
     };
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsReady(false);
-    setCurrentTime(0);
     setPlayerState(-1);
-    createPlayer();
+    setPlayer(null);
+
+    // If YT API is already loaded (common in tests and re-mounts), init synchronously.
+    // Otherwise load the IFrame API script and wait for it.
+    if (window.YT && window.YT.Player) {
+      initPlayer();
+    } else {
+      loadYouTubeAPI().then(initPlayer);
+    }
 
     return () => {
       destroyed = true;
-      if (playerRef.current) {
-        playerRef.current.destroy();
-        playerRef.current = null;
-      }
+      destroyRef.current?.();
+      destroyRef.current = null;
+      setPlayer(null);
       setIsReady(false);
+      setPlayerState(-1);
     };
   }, [videoId, containerId]);
 
-  // Polling for currentTime (100ms)
-  useEffect(() => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-
-    if (!isReady || !playerRef.current) return;
-
-    pollingRef.current = setInterval(() => {
-      if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
-        setCurrentTime(playerRef.current.getCurrentTime());
-      }
-    }, 100);
-
-    return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-    };
-  }, [isReady]);
-
   const seekTo = useCallback((seconds: number) => {
-    playerRef.current?.seekTo(seconds, true);
-  }, []);
+    player?.seekTo(seconds, true);
+  }, [player]);
 
   const playVideo = useCallback(() => {
-    playerRef.current?.playVideo();
-  }, []);
+    player?.playVideo();
+  }, [player]);
 
   const pauseVideo = useCallback(() => {
-    playerRef.current?.pauseVideo();
-  }, []);
+    player?.pauseVideo();
+  }, [player]);
 
-  /* eslint-disable react-hooks/refs */
-  return {
-    player: playerRef.current,
-    isReady,
-    currentTime,
-    playerState,
-    seekTo,
-    playVideo,
-    pauseVideo,
-  };
-  /* eslint-enable react-hooks/refs */
+  return { player, isReady, playerState, seekTo, playVideo, pauseVideo };
 }

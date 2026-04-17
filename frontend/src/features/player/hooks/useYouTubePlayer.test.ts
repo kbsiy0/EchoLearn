@@ -10,7 +10,7 @@
 
 import { renderHook, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useYouTubePlayer } from '../../../test/placeholders/useYouTubePlayer';
+import { useYouTubePlayer } from './useYouTubePlayer';
 
 // ---------------------------------------------------------------------------
 // YT.Player mock

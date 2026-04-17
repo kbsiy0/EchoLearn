@@ -13,7 +13,7 @@
 
 import { renderHook, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type Segment, useSubtitleSync } from '../../../test/placeholders/useSubtitleSync';
+import { type Segment, useSubtitleSync } from './useSubtitleSync';
 
 // ---------------------------------------------------------------------------
 // Setup: fake timers so RAF is synchronously controllable

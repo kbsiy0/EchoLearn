@@ -1,41 +1,51 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { SubtitleSegment, SubtitleResponse } from '../types/subtitle';
 import { getSubtitles } from '../api/subtitles';
 import { useYouTubePlayer } from '../features/player/hooks/useYouTubePlayer';
-import { useSubtitleSync } from '../features/player/hooks/useSubtitleSync';
+import { useSubtitleSync, type Segment } from '../features/player/hooks/useSubtitleSync';
+import { useAutoPause } from '../features/player/hooks/useAutoPause';
+import { useKeyboardShortcuts } from '../features/player/hooks/useKeyboardShortcuts';
 import { VideoPlayer } from '../features/player/components/VideoPlayer';
 import { SubtitlePanel } from '../features/player/components/SubtitlePanel';
 import { PlayerControls } from '../features/player/components/PlayerControls';
 import { LoadingSpinner } from '../features/player/components/LoadingSpinner';
 
 const PLAYER_CONTAINER_ID = 'yt-player';
-const AUTO_PAUSE_EPSILON = 0.08;
+
+/** Adapt API response shape to hook-internal Segment shape. */
+function toSegments(apiSegments: SubtitleSegment[]): Segment[] {
+  return apiSegments.map((s) => ({
+    idx: s.index,
+    start: s.start,
+    end: s.end,
+    text_en: s.text_en,
+    text_zh: s.text_zh,
+    words: s.words.map((w) => ({ text: w.word, start: w.start, end: w.end })),
+  }));
+}
 
 export function PlayerPage() {
   const { videoId } = useParams<{ videoId: string }>();
   const navigate = useNavigate();
 
   const [subtitleData, setSubtitleData] = useState<SubtitleResponse | null>(null);
-  const [segments, setSegments] = useState<SubtitleSegment[]>([]);
+  const [segments, setSegments] = useState<Segment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const autoPausedRef = useRef(false);
 
   const {
+    player,
     isReady,
-    currentTime,
     playerState,
     seekTo,
     playVideo,
     pauseVideo,
   } = useYouTubePlayer(videoId ?? null, PLAYER_CONTAINER_ID);
 
-  const { currentIndex, setCurrentIndex, currentWordIndex } = useSubtitleSync(
-    segments,
-    currentTime,
-    playerState
-  );
+  const { currentIndex, currentWordIndex } = useSubtitleSync(player, segments);
+
+  useAutoPause(player, segments, currentIndex, true);
 
   const isPlaying = playerState === 1;
 
@@ -50,7 +60,7 @@ export function PlayerPage() {
     getSubtitles(videoId)
       .then((data) => {
         setSubtitleData(data);
-        setSegments(data.segments);
+        setSegments(toSegments(data.segments));
         setLoading(false);
       })
       .catch(() => {
@@ -59,65 +69,32 @@ export function PlayerPage() {
       });
   }, [videoId, navigate]);
 
-  // Auto-pause at segment end
-  useEffect(() => {
-    if (!isPlaying || segments.length === 0) return;
-    const seg = segments[currentIndex];
-    if (!seg) return;
-    if (currentTime >= seg.end - AUTO_PAUSE_EPSILON && !autoPausedRef.current) {
-      const endsWithPunctuation = /[.!?]$/.test(seg.text_en.trim());
-      if (endsWithPunctuation) {
-        autoPausedRef.current = true;
-        pauseVideo();
-      }
-    }
-  }, [currentTime, currentIndex, isPlaying, segments, pauseVideo]);
-
-  // Reset auto-pause flag when segment changes
-  useEffect(() => {
-    autoPausedRef.current = false;
-  }, [currentIndex]);
-
   // Navigation helpers
   const goToSegment = useCallback(
     (idx: number) => {
       if (idx < 0 || idx >= segments.length) return;
-      setCurrentIndex(idx);
-      autoPausedRef.current = false;
       seekTo(segments[idx].start);
       playVideo();
     },
-    [segments, seekTo, playVideo, setCurrentIndex]
+    [segments, seekTo, playVideo],
   );
 
   const handlePrev = useCallback(() => goToSegment(currentIndex - 1), [goToSegment, currentIndex]);
   const handleNext = useCallback(() => goToSegment(currentIndex + 1), [goToSegment, currentIndex]);
   const handleRepeat = useCallback(() => goToSegment(currentIndex), [goToSegment, currentIndex]);
   const handleTogglePlay = useCallback(() => {
-    if (isPlaying) {
-      pauseVideo();
-    } else {
-      autoPausedRef.current = false;
-      playVideo();
-    }
+    if (isPlaying) pauseVideo();
+    else playVideo();
   }, [isPlaying, playVideo, pauseVideo]);
 
   const handleClickSegment = useCallback((idx: number) => goToSegment(idx), [goToSegment]);
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      switch (e.key) {
-        case ' ': e.preventDefault(); handleTogglePlay(); break;
-        case 'ArrowLeft': e.preventDefault(); handlePrev(); break;
-        case 'ArrowRight': e.preventDefault(); handleNext(); break;
-        case 'r': case 'R': e.preventDefault(); handleRepeat(); break;
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleTogglePlay, handlePrev, handleNext, handleRepeat]);
+  useKeyboardShortcuts({
+    onTogglePlay: handleTogglePlay,
+    onPrev: handlePrev,
+    onNext: handleNext,
+    onRepeat: handleRepeat,
+  });
 
   if (loading) return <LoadingSpinner progress={0} status="載入字幕中..." />;
   if (error) return <div className="flex-1 flex items-center justify-center text-red-400">{error}</div>;
@@ -143,7 +120,14 @@ export function PlayerPage() {
           </h2>
           <div className="flex-1 overflow-hidden">
             <SubtitlePanel
-              segments={segments}
+              segments={segments.map((s, i) => ({
+                index: i,
+                start: s.start,
+                end: s.end,
+                text_en: s.text_en,
+                text_zh: s.text_zh,
+                words: s.words.map((w) => ({ word: w.text, start: w.start, end: w.end })),
+              }))}
               currentIndex={currentIndex}
               currentWordIndex={currentWordIndex}
               onClickSegment={handleClickSegment}
