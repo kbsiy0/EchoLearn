@@ -1,13 +1,8 @@
 """Jobs repository — CRUD for the `jobs` table.
 
-All write methods validate `video_id` against the YouTube canonical regex
-before issuing any SQL.  Progress is monotonic: never decreases.
-
-Thread safety: progress monotonicity is enforced via SQL-level conditional
-UPDATE (WHERE progress <= ?) so SQLite's own locking guarantees atomicity
-even across multiple JobsRepo instances sharing the same connection.
-Other writes use a per-instance Lock to serialise access on a shared
-in-memory connection (unit tests).
+Thread safety: all writes share a per-connection Lock so concurrent
+JobsRepo instances on the same connection serialise correctly.
+Progress monotonicity is additionally enforced by SQL WHERE progress<=?.
 """
 
 import logging
@@ -15,12 +10,36 @@ import os
 import re
 import sqlite3
 import threading
+import weakref
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 logger = logging.getLogger(__name__)
 
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+# id(conn) → Lock mapping.  A finalizer removes entries when connections close.
+_conn_locks: dict = {}
+_conn_locks_guard = threading.Lock()
+
+
+def _lock_for(conn: sqlite3.Connection) -> threading.Lock:
+    conn_id = id(conn)
+    with _conn_locks_guard:
+        if conn_id not in _conn_locks:
+            lock = threading.Lock()
+            _conn_locks[conn_id] = lock
+
+            def _cleanup(cid: int = conn_id) -> None:
+                with _conn_locks_guard:
+                    _conn_locks.pop(cid, None)
+
+            try:
+                weakref.finalize(conn, _cleanup)
+            except TypeError:
+                pass  # tolerate: dict stays bounded to open connections
+
+        return _conn_locks[conn_id]
 
 
 def _validate_video_id(video_id: str) -> None:
@@ -39,7 +58,7 @@ class JobsRepo:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
-        self._lock = threading.Lock()
+        self._lock: threading.Lock = _lock_for(conn)
 
     # ------------------------------------------------------------------
     # Write methods
@@ -51,24 +70,18 @@ class JobsRepo:
         now = _now()
         with self._lock:
             self._conn.execute(
-                """
-                INSERT INTO jobs (job_id, video_id, status, progress, created_at, updated_at)
-                VALUES (?, ?, 'queued', 0, ?, ?)
-                """,
+                "INSERT INTO jobs (job_id, video_id, status, progress, created_at, updated_at)"
+                " VALUES (?, ?, 'queued', 0, ?, ?)",
                 (job_id, video_id, now, now),
             )
             self._conn.commit()
 
     def update_progress(self, job_id: str, progress: int) -> None:
-        """Advance progress — monotonic: highest value wins.
+        """Advance progress (monotonic — highest value wins).
 
-        Uses a SQL-level conditional UPDATE (WHERE progress <= ?) so the
-        monotonicity guarantee holds even when multiple JobsRepo instances
-        share the same SQLite connection.
-
-        In strict mode (EL_TEST_STRICT=1): if progress would decrease,
-        raises AssertionError *before* issuing any SQL.
-        In production mode: a lower value is silently ignored (no-op + WARN).
+        Strict mode (EL_TEST_STRICT=1): raises AssertionError if lowered.
+        Production mode: lower write is a silent no-op + WARN log.
+        SQL WHERE progress<=? gives cross-instance atomicity.
         """
         strict = os.environ.get("EL_TEST_STRICT") == "1"
 
@@ -88,10 +101,6 @@ class JobsRepo:
                 )
                 return
 
-            # SQL-level conditional UPDATE: only writes if stored progress is
-            # still <= the value we intend to set.  Atomicity is guaranteed
-            # by SQLite; the lock covers the entire read-decide-write cycle so
-            # threads sharing one connection don't interleave transactions.
             cursor = self._conn.execute(
                 "UPDATE jobs SET progress=?, updated_at=?"
                 " WHERE job_id=? AND progress<=?",
@@ -101,8 +110,7 @@ class JobsRepo:
 
         if cursor.rowcount == 0:
             logger.warning(
-                "update_progress conditional no-op (concurrent write beat us): "
-                "%s tried %d but DB already has higher value",
+                "update_progress conditional no-op: %s tried %d but DB has higher",
                 job_id, progress,
             )
 
@@ -116,27 +124,20 @@ class JobsRepo:
         """Update job status and optionally set error fields."""
         with self._lock:
             self._conn.execute(
-                """
-                UPDATE jobs
-                SET status=?, error_code=?, error_message=?, updated_at=?
-                WHERE job_id=?
-                """,
+                "UPDATE jobs SET status=?, error_code=?, error_message=?, updated_at=?"
+                " WHERE job_id=?",
                 (status, error_code, error_message, _now(), job_id),
             )
             self._conn.commit()
 
     def sweep_stuck_processing(self, older_than_sec: float) -> int:
-        """Flip processing jobs older than threshold to failed with INTERNAL_ERROR.
+        """Flip processing jobs older than threshold to failed/INTERNAL_ERROR.
 
-        Args:
-            older_than_sec: Age threshold in seconds.  Jobs whose updated_at
-                            timestamp is older than this value are swept.
-
-        Returns:
-            Number of rows updated.
+        Returns the number of rows updated.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_sec)
-        cutoff_iso = cutoff.isoformat()
+        cutoff_iso = (
+            datetime.now(timezone.utc) - timedelta(seconds=older_than_sec)
+        ).isoformat()
 
         with self._lock:
             cursor = self._conn.execute(
@@ -165,7 +166,6 @@ class JobsRepo:
             return self._get_unlocked(job_id)
 
     def _get_unlocked(self, job_id: str) -> Optional[sqlite3.Row]:
-        """Read without acquiring lock — caller must hold self._lock."""
         cursor = self._conn.execute(
             "SELECT * FROM jobs WHERE job_id=?", (job_id,)
         )
@@ -175,12 +175,8 @@ class JobsRepo:
         """Return the most recent queued or processing job for video_id, or None."""
         with self._lock:
             cursor = self._conn.execute(
-                """
-                SELECT * FROM jobs
-                WHERE video_id=? AND status IN ('queued','processing')
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
+                "SELECT * FROM jobs WHERE video_id=? AND status IN ('queued','processing')"
+                " ORDER BY created_at DESC LIMIT 1",
                 (video_id,),
             )
             return cursor.fetchone()
