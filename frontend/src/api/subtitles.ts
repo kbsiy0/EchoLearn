@@ -6,7 +6,7 @@ export async function createJob(youtubeUrl: string): Promise<{ job_id?: string; 
   const res = await fetch(`${API_BASE}/subtitles/jobs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ youtube_url: youtubeUrl }),
+    body: JSON.stringify({ url: youtubeUrl }),
   });
   if (!res.ok) {
     const err = await res.json();
