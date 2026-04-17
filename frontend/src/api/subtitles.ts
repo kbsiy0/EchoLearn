@@ -1,6 +1,5 @@
 import type { JobStatus, SubtitleResponse } from '../types/subtitle';
-
-const API_BASE = 'http://localhost:8000/api';
+import { API_BASE } from './base';
 
 export async function createJob(youtubeUrl: string): Promise<{ job_id?: string; video_id: string; status: string; cached?: boolean }> {
   const res = await fetch(`${API_BASE}/subtitles/jobs`, {

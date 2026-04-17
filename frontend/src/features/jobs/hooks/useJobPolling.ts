@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { API_BASE } from '../../../api/base';
 
 export interface JobStatus {
   job_id: string;
@@ -47,7 +48,7 @@ export function useJobPolling(
       const controller = new AbortController();
       abortRef.current = controller;
       try {
-        const res = await fetch(`/api/subtitles/jobs/${jobId}`, {
+        const res = await fetch(`${API_BASE}/subtitles/jobs/${jobId}`, {
           signal: controller.signal,
         });
         if (!res.ok) {

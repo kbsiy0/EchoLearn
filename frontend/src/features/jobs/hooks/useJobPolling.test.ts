@@ -52,7 +52,7 @@ describe('useJobPolling', () => {
 
   it('polls the jobs endpoint and updates job state', async () => {
     server.use(
-      http.get('/api/subtitles/jobs/job-001', () => {
+      http.get('http://localhost:8000/api/subtitles/jobs/job-001', () => {
         return HttpResponse.json(makeJob({ status: 'processing', progress: 20 }));
       }),
     );
@@ -67,7 +67,7 @@ describe('useJobPolling', () => {
   it('stops polling when status becomes completed', async () => {
     let callCount = 0;
     server.use(
-      http.get('/api/subtitles/jobs/job-002', () => {
+      http.get('http://localhost:8000/api/subtitles/jobs/job-002', () => {
         callCount++;
         return HttpResponse.json(makeJob({ job_id: 'job-002', status: 'completed', progress: 100 }));
       }),
@@ -87,7 +87,7 @@ describe('useJobPolling', () => {
   it('stops polling when status becomes failed', async () => {
     let callCount = 0;
     server.use(
-      http.get('/api/subtitles/jobs/job-003', () => {
+      http.get('http://localhost:8000/api/subtitles/jobs/job-003', () => {
         callCount++;
         return HttpResponse.json(
           makeJob({ job_id: 'job-003', status: 'failed', error_code: 'WHISPER_ERROR' }),
@@ -107,7 +107,7 @@ describe('useJobPolling', () => {
   it('clears interval on unmount (cancel-on-unmount)', async () => {
     let callCount = 0;
     server.use(
-      http.get('/api/subtitles/jobs/job-004', () => {
+      http.get('http://localhost:8000/api/subtitles/jobs/job-004', () => {
         callCount++;
         return HttpResponse.json(makeJob({ job_id: 'job-004', status: 'processing' }));
       }),
@@ -127,7 +127,7 @@ describe('useJobPolling', () => {
 
   it('returns correct job fields from response', async () => {
     server.use(
-      http.get('/api/subtitles/jobs/job-005', () => {
+      http.get('http://localhost:8000/api/subtitles/jobs/job-005', () => {
         return HttpResponse.json(
           makeJob({ job_id: 'job-005', video_id: 'abc12345678', status: 'queued' }),
         );
