@@ -136,3 +136,84 @@ class TestFakeWhisperRaisesOnException:
         fake = FakeWhisperClient(words=ValueError("WHISPER_ERROR: boom"))
         with pytest.raises(ValueError, match="WHISPER_ERROR"):
             fake.transcribe(Path("/tmp/audio.mp3"))
+
+
+# ---------------------------------------------------------------------------
+# Conditional real-client signature drift detection (activates after T03)
+# ---------------------------------------------------------------------------
+
+import importlib.util  # noqa: E402
+
+
+class TestFakeWhisperVsRealClient:
+    """Compare FakeWhisperClient.transcribe against the real WhisperClient.
+
+    Skips until T03 creates app.services.transcription.whisper.WhisperClient.
+    After T03 lands this test runs automatically — no manual follow-up needed.
+    """
+
+    def test_transcribe_signature_matches_real(self):
+        import pytest
+        try:
+            spec = importlib.util.find_spec("app.services.transcription.whisper")
+        except (ModuleNotFoundError, ValueError):
+            spec = None
+        if spec is None:
+            pytest.skip(
+                "real WhisperClient not implemented yet — will activate in T03"
+            )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        RealWhisperClient = module.WhisperClient
+
+        from tests.fakes.whisper import FakeWhisperClient
+        fake_params = _param_names(FakeWhisperClient.transcribe)
+        real_params = _param_names(RealWhisperClient.transcribe)
+        assert fake_params == real_params, (
+            f"FakeWhisperClient.transcribe params {fake_params} drifted from "
+            f"real WhisperClient.transcribe params {real_params}"
+        )
+
+        fake_kinds = _param_kinds(FakeWhisperClient.transcribe)
+        real_kinds = _param_kinds(RealWhisperClient.transcribe)
+        assert fake_kinds == real_kinds, (
+            f"FakeWhisperClient.transcribe param kinds mismatch: "
+            f"{fake_kinds} != {real_kinds}"
+        )
+
+
+class TestFakeTranslatorVsRealClient:
+    """Compare FakeTranslator.translate_batch against the real Translator.
+
+    Skips until T03 creates app.services.translation.translator.Translator.
+    After T03 lands this test runs automatically — no manual follow-up needed.
+    """
+
+    def test_translate_batch_signature_matches_real(self):
+        import pytest
+        try:
+            spec = importlib.util.find_spec("app.services.translation.translator")
+        except (ModuleNotFoundError, ValueError):
+            spec = None
+        if spec is None:
+            pytest.skip(
+                "real Translator not implemented yet — will activate in T03"
+            )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        RealTranslator = module.Translator
+
+        from tests.fakes.translator import FakeTranslator
+        fake_params = _param_names(FakeTranslator.translate_batch)
+        real_params = _param_names(RealTranslator.translate_batch)
+        assert fake_params == real_params, (
+            f"FakeTranslator.translate_batch params {fake_params} drifted from "
+            f"real Translator.translate_batch params {real_params}"
+        )
+
+        fake_kinds = _param_kinds(FakeTranslator.translate_batch)
+        real_kinds = _param_kinds(RealTranslator.translate_batch)
+        assert fake_kinds == real_kinds, (
+            f"FakeTranslator.translate_batch param kinds mismatch: "
+            f"{fake_kinds} != {real_kinds}"
+        )

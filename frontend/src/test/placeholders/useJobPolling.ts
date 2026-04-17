@@ -50,8 +50,11 @@ export function useJobPolling(
 
   useEffect(() => {
     // Reset state when jobId changes (including to null).
+    // intentional: placeholder mirrors production reset-on-dep-change behavior; deleted in T06/T07
+    /* eslint-disable react-hooks/set-state-in-effect */
     setJob(null);
     setError(null);
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     if (!jobId) {
       return;

@@ -96,8 +96,11 @@ export function useSubtitleSync(
       // Reset to -1 on dependency change that invalidates sync.
       prevIndexRef.current = -1;
       prevWordIndexRef.current = -1;
+      // intentional: placeholder mirrors production reset-on-dep-change behavior; deleted in T06/T07
+      /* eslint-disable react-hooks/set-state-in-effect */
       setCurrentIndex(-1);
       setCurrentWordIndex(-1);
+      /* eslint-enable react-hooks/set-state-in-effect */
       return;
     }
 
