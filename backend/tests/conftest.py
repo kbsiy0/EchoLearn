@@ -37,8 +37,8 @@ def el_test_strict(monkeypatch: pytest.MonkeyPatch) -> None:
 def db_conn() -> sqlite3.Connection:
     """In-memory SQLite connection with the full EchoLearn schema applied.
 
-    WAL mode is skipped for in-memory DBs (not supported); the schema DDL uses
-    CREATE TABLE IF NOT EXISTS so re-entrant fixture use is safe.
+    WAL mode is skipped for in-memory DBs (not supported); each call creates a
+    fresh :memory: connection so the schema DDL runs on a clean slate.
     Returns a live connection; caller must not close it — the fixture owns lifecycle.
     """
     conn = sqlite3.connect(":memory:", check_same_thread=False)
