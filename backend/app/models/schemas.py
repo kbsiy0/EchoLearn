@@ -1,45 +1,76 @@
-from typing import List, Optional
+"""Pydantic schemas for EchoLearn API."""
+
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
 
 class WordTiming(BaseModel):
-    word: str
+    text: str
     start: float
     end: float
 
 
-class SubtitleSegment(BaseModel):
-    index: int
-    start: float  # seconds
+class Segment(BaseModel):
+    idx: int
+    start: float
     end: float
     text_en: str
     text_zh: str
-    words: List[WordTiming] = []
+    words: list[WordTiming]
+
+
+class VideoMetadata(BaseModel):
+    video_id: str
+    title: str
+    duration_sec: float
+    source: str
 
 
 class SubtitleResponse(BaseModel):
     video_id: str
     title: str
-    segments: List[SubtitleSegment]
-    source: str  # "youtube_captions" | "whisper"
-    created_at: str  # ISO timestamp
+    duration_sec: float
+    segments: list[Segment]
 
 
-class ErrorResponse(BaseModel):
-    code: str  # "INVALID_URL" | "VIDEO_PRIVATE" | "NO_CAPTIONS" | "OPENAI_ERROR" | "VIDEO_TOO_LONG"
-    message: str
-    retryable: bool
-
-
-class JobCreate(BaseModel):
-    youtube_url: str
+class VideoSummary(BaseModel):
+    video_id: str
+    title: str
+    duration_sec: float
+    created_at: str
 
 
 class JobStatus(BaseModel):
     job_id: str
     video_id: str
-    status: str  # "queued" | "processing" | "completed" | "failed"
-    progress: int  # 0-100
-    error: Optional[ErrorResponse] = None
-    cached: bool = False
+    status: Literal["queued", "processing", "completed", "failed"]
+    progress: int  # 0..100
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class CreateJobRequest(BaseModel):
+    url: str
+
+
+class ErrorResponse(BaseModel):
+    code: str
+    message: str
+    retryable: bool
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat aliases (used by old subtitles.py router until T05 removes it)
+# ---------------------------------------------------------------------------
+
+JobCreate = CreateJobRequest  # old name → new name
+
+class SubtitleSegment(BaseModel):
+    """Legacy schema used by old subtitles.py router. Replaced by Segment in T03+."""
+    index: int
+    start: float
+    end: float
+    text_en: str
+    text_zh: str
+    words: list[WordTiming] = []
