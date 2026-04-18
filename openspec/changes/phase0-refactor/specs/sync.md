@@ -42,14 +42,24 @@ function useAutoPause(
 ### Keyboard shortcuts hook
 ```typescript
 // frontend/src/features/player/hooks/useKeyboardShortcuts.ts
-function useKeyboardShortcuts(
-  player: YT.Player | null,
-  segments: Segment[],
-  currentIndex: number,
-): void;
-//   space = play/pause
-//   ←/→   = jump to previous/next segment
-//   R     = replay current segment from its start
+
+export interface KeyboardShortcutsOptions {
+  onTogglePlay: () => void;  // called when Space is pressed — caller toggles play/pause
+  onPrev: () => void;        // called when ← is pressed — caller jumps to previous segment
+  onNext: () => void;        // called when → is pressed — caller jumps to next segment
+  onRepeat: () => void;      // called when R/r is pressed — caller replays current segment
+}
+
+function useKeyboardShortcuts(options: KeyboardShortcutsOptions): void;
+//   space = onTogglePlay
+//   ←     = onPrev
+//   →     = onNext
+//   R/r   = onRepeat
+//
+// Action logic lives in the caller (PlayerPage). This callback-based shape
+// avoids direct coupling to YT.Player internals inside the hook and makes
+// the hook trivially testable with vi.fn() callbacks.
+// Note: shortcuts are suppressed when the event target is an input/textarea/contentEditable.
 ```
 
 ## Invariants
