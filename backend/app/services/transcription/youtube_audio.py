@@ -122,6 +122,7 @@ def download_audio(video_id: str) -> Path:
             "-x",
             "--audio-format", "mp3",
             "--audio-quality", "0",
+            "--extractor-args", "youtube:player_client=ios,android,web",
             "-o", str(output_path),
             url,
         ],
