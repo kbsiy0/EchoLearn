@@ -5,7 +5,7 @@
  * advance RAF ticks via fake timers, verify fire-once semantics.
  */
 
-import { renderHook } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Segment } from './useSubtitleSync';
 import { useAutoPause } from './useAutoPause';
@@ -40,8 +40,13 @@ const SEG_A: Segment = makeSegment({ idx: 0, start: 0.0, end: 3.0 });
 const SEG_B: Segment = makeSegment({ idx: 1, start: 4.0, end: 7.0 });
 const SEGMENTS: Segment[] = [SEG_A, SEG_B];
 
+/**
+ * Tick the RAF loop once by advancing fake timers by 16ms (one frame).
+ * Must use single-frame advancement — vi.runAllTimersAsync() causes infinite
+ * loops with the sustained RAF pattern (loop keeps rescheduling until fired).
+ */
 async function tick(): Promise<void> {
-  await vi.runAllTimersAsync();
+  await act(async () => { vi.advanceTimersByTime(16); });
 }
 
 describe('useAutoPause', () => {
@@ -125,5 +130,32 @@ describe('useAutoPause', () => {
     renderHook(() => useAutoPause(player, SEGMENTS, -1, true));
     await tick();
     expect(pauseVideo).not.toHaveBeenCalled();
+  });
+
+  it('fires exactly once when time advances from seg.start to past seg.end across ≥10 RAF frames', async () => {
+    // Simulates real playback: time advances frame-by-frame from start → past end.
+    // The sustained RAF loop must keep sampling even without component re-renders.
+    // With the broken single-RAF-per-render pattern, getCurrentTime() only returns
+    // seg.start on the first frame (before end-epsilon), and no more RAFs fire ⇒ never pauses.
+    const pauseVideo = vi.fn();
+    const frameCount = 12;
+    const seg = SEG_A; // start=0.0, end=3.0
+    let frame = 0;
+    // Each call advances time evenly from start to end+0.1 over frameCount frames
+    const player = makePlayer(() => {
+      const t = seg.start + ((seg.end - seg.start + 0.1) * frame) / (frameCount - 1);
+      frame = Math.min(frame + 1, frameCount - 1);
+      return t;
+    }, pauseVideo);
+
+    renderHook(() => useAutoPause(player, SEGMENTS, 0, true));
+
+    // Tick 12 frames — each tick advances fake timers by 16ms to fire one RAF
+    for (let i = 0; i < frameCount; i++) {
+      await act(async () => { vi.advanceTimersByTime(16); });
+    }
+
+    // Must have fired exactly once (fire-at-most-once guard still holds)
+    expect(pauseVideo).toHaveBeenCalledTimes(1);
   });
 });
