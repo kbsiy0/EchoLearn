@@ -14,8 +14,8 @@ without touching the real OpenAI API or filesystem.
 from __future__ import annotations
 
 import logging
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Callable, Optional
 
 from app.repositories.jobs_repo import JobsRepo
@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 # Type alias for a callable that accepts job_id and runs the pipeline.
 PipelineRunFn = Callable[[str], None]
+
+_DEFAULT_AUDIO_DIR = Path("data/audio")
 
 
 class JobRunner:
@@ -39,6 +41,8 @@ class JobRunner:
             connection on first use (lazy — T05 wiring).
         pipeline_run_fn: Callable(job_id) that executes the pipeline.
             Defaults to the module-level ``pipeline.run`` function.
+        audio_dir: Directory containing downloaded audio files. Defaults to
+            ``data/audio``. Injectable for tests.
     """
 
     def __init__(
@@ -47,11 +51,13 @@ class JobRunner:
         stale_threshold_sec: float = 60.0,
         jobs_repo: Optional[JobsRepo] = None,
         pipeline_run_fn: Optional[PipelineRunFn] = None,
+        audio_dir: Optional[Path] = None,
     ) -> None:
         self.stale_threshold_sec = stale_threshold_sec
         self._max_workers = max_workers
         self._jobs_repo = jobs_repo
         self._pipeline_run_fn = pipeline_run_fn or _default_pipeline_run
+        self._audio_dir = audio_dir if audio_dir is not None else _DEFAULT_AUDIO_DIR
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
     # ------------------------------------------------------------------
@@ -63,9 +69,9 @@ class JobRunner:
         self._executor.submit(self._run_job, job_id)
 
     def startup_sweep(self) -> int:
-        """Sweep stale processing rows to failed/INTERNAL_ERROR.
+        """Sweep stale processing rows to failed/INTERNAL_ERROR, then remove audio orphans.
 
-        Returns the number of rows swept.
+        Returns the number of DB rows swept.
         """
         repo = self._get_repo()
         count = repo.sweep_stuck_processing(
@@ -76,7 +82,26 @@ class JobRunner:
                 "startup_sweep: swept %d stale processing job(s) to failed",
                 count,
             )
+        self._sweep_audio_orphans(repo)
         return count
+
+    def _sweep_audio_orphans(self, repo: JobsRepo) -> None:
+        """Delete mp3 files in audio_dir that have no matching active (queued/processing) job.
+
+        Files whose video_id maps to a queued or processing job are retained;
+        all others (no job, completed, failed) are unlinked.
+        """
+        if not self._audio_dir.exists():
+            return
+        for mp3 in self._audio_dir.glob("*.mp3"):
+            video_id = mp3.stem
+            active = repo.find_active_for_video(video_id)
+            if active is None:
+                try:
+                    mp3.unlink()
+                    logger.info("startup_sweep: removed orphan audio %s", mp3.name)
+                except OSError:
+                    logger.warning("startup_sweep: could not remove %s", mp3.name)
 
     def shutdown(self, wait: bool = True) -> None:
         """Shut down the thread pool, optionally waiting for in-flight jobs."""

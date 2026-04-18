@@ -4,10 +4,13 @@ Covers:
 - Stale processing row older than threshold → swept to failed / INTERNAL_ERROR
 - Fresh processing row within threshold → left untouched
 - Default stale_threshold_sec attribute is 60.0 (no wall-clock wait)
+- Audio orphan sweep: mp3 files with no matching processing job are deleted
+- Audio orphan sweep: mp3 with a matching processing job is retained
 """
 
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -63,3 +66,86 @@ class TestStartupSweep:
 
         runner = JobRunner()
         assert runner.stale_threshold_sec == 60.0
+
+
+class TestAudioOrphanSweep:
+    """Audio files in data/audio/ with no matching processing job are removed."""
+
+    def test_orphan_mp3_no_job_is_deleted(self, db_conn, tmp_path):
+        """An mp3 with no DB row at all is removed by startup_sweep."""
+        from app.jobs.runner import JobRunner
+
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        orphan = audio_dir / "orphanAAAAA.mp3"  # 11-char stem
+        orphan.write_bytes(b"fake audio")
+
+        repo = JobsRepo(db_conn)
+        runner = JobRunner(jobs_repo=repo, audio_dir=audio_dir)
+        runner.startup_sweep()
+
+        assert not orphan.exists()
+
+    def test_orphan_mp3_completed_job_is_deleted(self, db_conn, tmp_path):
+        """An mp3 whose job is completed (not processing) is removed."""
+        from app.jobs.runner import JobRunner
+
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+
+        video_id = "completedAA"  # exactly 11 chars
+        job_id = str(uuid.uuid4())
+        repo = JobsRepo(db_conn)
+        repo.create(job_id, video_id)
+        repo.update_status(job_id, "completed")
+
+        mp3 = audio_dir / f"{video_id}.mp3"
+        mp3.write_bytes(b"fake audio")
+
+        runner = JobRunner(jobs_repo=repo, audio_dir=audio_dir)
+        runner.startup_sweep()
+
+        assert not mp3.exists()
+
+    def test_active_mp3_processing_job_is_retained(self, db_conn, tmp_path):
+        """An mp3 whose job is still processing is kept by startup_sweep."""
+        from app.jobs.runner import JobRunner
+
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+
+        video_id = "activeAAAAA"  # exactly 11 chars
+        repo = JobsRepo(db_conn)
+        _create_processing_job(repo, video_id=video_id)
+
+        mp3 = audio_dir / f"{video_id}.mp3"
+        mp3.write_bytes(b"fake audio")
+
+        runner = JobRunner(jobs_repo=repo, audio_dir=audio_dir)
+        runner.startup_sweep()
+
+        assert mp3.exists()
+
+    def test_mixed_files_only_orphans_deleted(self, db_conn, tmp_path):
+        """With multiple mp3s, only those without a processing job are removed."""
+        from app.jobs.runner import JobRunner
+
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+
+        active_vid = "activeAAAAA"   # 11 chars
+        orphan_vid = "orphanAAAAA"   # 11 chars
+
+        repo = JobsRepo(db_conn)
+        _create_processing_job(repo, video_id=active_vid)
+
+        active_mp3 = audio_dir / f"{active_vid}.mp3"
+        active_mp3.write_bytes(b"fake audio")
+        orphan_mp3 = audio_dir / f"{orphan_vid}.mp3"
+        orphan_mp3.write_bytes(b"fake audio")
+
+        runner = JobRunner(jobs_repo=repo, audio_dir=audio_dir)
+        runner.startup_sweep()
+
+        assert active_mp3.exists()
+        assert not orphan_mp3.exists()
