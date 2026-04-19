@@ -33,56 +33,40 @@ declare global {
   }
 }
 
-// -- Binary search helpers (pure functions, O(log n)) -----------------------
-
-/**
- * Find the rightmost segment whose start <= t.
- * Returns -1 if none.
- */
+/** Find the rightmost segment whose start <= t. Returns -1 if none. */
 export function binarySearchSegment(segments: Segment[], t: number): number {
-  let lo = 0;
-  let hi = segments.length - 1;
-  let result = -1;
+  let lo = 0, hi = segments.length - 1, result = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >>> 1;
-    if (segments[mid].start <= t) {
-      result = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
+    if (segments[mid].start <= t) { result = mid; lo = mid + 1; }
+    else { hi = mid - 1; }
   }
   return result;
 }
 
-/**
- * Find the rightmost word whose start <= t.
- * Returns -1 if none.
- */
+/** Find the rightmost word whose start <= t. Returns -1 if none. */
 export function binarySearchWord(words: WordTiming[], t: number): number {
-  let lo = 0;
-  let hi = words.length - 1;
-  let result = -1;
+  let lo = 0, hi = words.length - 1, result = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >>> 1;
-    if (words[mid].start <= t) {
-      result = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
+    if (words[mid].start <= t) { result = mid; lo = mid + 1; }
+    else { hi = mid - 1; }
   }
   return result;
 }
 
-// -- Hook --------------------------------------------------------------------
+/** Pushes a sync-stat entry unless skip is armed (post-resume IFrame latency). */
+function pushStatIfNotSkipped(
+  bucket: SyncTransition[], t: number, expected: number, skip: boolean,
+): boolean {
+  if (!skip) bucket.push({ at: t, expected, delta: Math.abs(t - expected) });
+  return false;
+}
 
 /**
  * Syncs the active subtitle segment and word to the player's current time.
- *
- * Uses requestAnimationFrame for ~60fps polling.
- * Uses binary search for O(log n) segment/word lookup.
- * setState is called only when index actually changes — no wasted re-renders.
+ * Uses requestAnimationFrame (~60fps) + binary search (O(log n)).
+ * setState only fires on index changes — no wasted re-renders.
  *
  * Signature per specs/sync.md:
  *   useSubtitleSync(player, segments) → { currentIndex, currentWordIndex }
@@ -90,27 +74,29 @@ export function binarySearchWord(words: WordTiming[], t: number): number {
 export function useSubtitleSync(
   player: YT.Player | null,
   segments: Segment[],
-): {
-  currentIndex: number;
-  currentWordIndex: number;
-} {
+): { currentIndex: number; currentWordIndex: number } {
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [currentWordIndex, setCurrentWordIndex] = useState(-1);
   const rafRef = useRef<number | null>(null);
   const prevIndexRef = useRef(-1);
   const prevWordRef = useRef(-1);
+  const prevStateRef = useRef<number | null>(null);
+  const skipSentenceRef = useRef(false);
+  const skipWordRef = useRef(false);
 
   useEffect(() => {
     if (!player || segments.length === 0) {
       prevIndexRef.current = -1;
       prevWordRef.current = -1;
+      prevStateRef.current = null;
+      skipSentenceRef.current = false;
+      skipWordRef.current = false;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setCurrentIndex(-1);
       setCurrentWordIndex(-1);
       return;
     }
 
-    // Initialize debug stats bucket (DEV only)
     if (import.meta.env.DEV) {
       window.__subtitleSyncStats = window.__subtitleSyncStats ?? {
         sentenceTransitions: [],
@@ -128,6 +114,19 @@ export function useSubtitleSync(
 
         const t = player.getCurrentTime();
 
+        // Detect paused(2)→playing(1) flip; arm skip flags to exclude the
+        // next transition from stats (IFrame resume latency taints the delta).
+        const state =
+          typeof player.getPlayerState === 'function'
+            ? player.getPlayerState() : null;
+        if (state !== null) {
+          if (prevStateRef.current === 2 && state === 1) {
+            skipSentenceRef.current = true;
+            skipWordRef.current = true;
+          }
+          prevStateRef.current = state;
+        }
+
         // Segment lookup
         const segCandidate = binarySearchSegment(segments, t);
         const activeSegIdx =
@@ -138,21 +137,18 @@ export function useSubtitleSync(
         if (activeSegIdx >= 0) {
           const words = segments[activeSegIdx].words;
           if (words.length > 0) {
-            const wCandidate = binarySearchWord(words, t);
-            activeWordIdx =
-              wCandidate >= 0 && t <= words[wCandidate].end ? wCandidate : -1;
+            const wc = binarySearchWord(words, t);
+            activeWordIdx = wc >= 0 && t <= words[wc].end ? wc : -1;
           }
         }
 
-        // setState only on transitions
+        // setState only on transitions (stats push skipped on post-resume tick)
         if (activeSegIdx !== prevIndexRef.current) {
           if (import.meta.env.DEV && window.__subtitleSyncStats && activeSegIdx >= 0) {
-            const expected = segments[activeSegIdx].start;
-            window.__subtitleSyncStats.sentenceTransitions.push({
-              at: t,
-              expected,
-              delta: Math.abs(t - expected),
-            });
+            skipSentenceRef.current = pushStatIfNotSkipped(
+              window.__subtitleSyncStats.sentenceTransitions,
+              t, segments[activeSegIdx].start, skipSentenceRef.current,
+            );
           }
           prevIndexRef.current = activeSegIdx;
           setCurrentIndex(activeSegIdx);
@@ -160,24 +156,19 @@ export function useSubtitleSync(
 
         if (activeWordIdx !== prevWordRef.current) {
           if (
-            import.meta.env.DEV &&
-            window.__subtitleSyncStats &&
-            activeWordIdx >= 0 &&
-            activeSegIdx >= 0
+            import.meta.env.DEV && window.__subtitleSyncStats &&
+            activeWordIdx >= 0 && activeSegIdx >= 0
           ) {
-            const words = segments[activeSegIdx].words;
-            const expected = words[activeWordIdx].start;
-            window.__subtitleSyncStats.wordTransitions.push({
-              at: t,
-              expected,
-              delta: Math.abs(t - expected),
-            });
+            skipWordRef.current = pushStatIfNotSkipped(
+              window.__subtitleSyncStats.wordTransitions,
+              t, segments[activeSegIdx].words[activeWordIdx].start,
+              skipWordRef.current,
+            );
           }
           prevWordRef.current = activeWordIdx;
           setCurrentWordIndex(activeWordIdx);
         }
       } catch (err) {
-        // Don't kill the loop on transient errors — log in DEV, silent in prod.
         if (import.meta.env.DEV) {
           console.error('[useSubtitleSync] tick error (continuing loop):', err);
         }
@@ -193,6 +184,9 @@ export function useSubtitleSync(
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
+      prevStateRef.current = null;
+      skipSentenceRef.current = false;
+      skipWordRef.current = false;
     };
   }, [player, segments]);
 
