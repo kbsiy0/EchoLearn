@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-// ---------------------------------------------------------------------------
-// Types (exported so tests and consumers can use the same shape)
-// ---------------------------------------------------------------------------
+// -- Types (exported so tests and consumers can use the same shape) ----------
 
 export interface WordTiming {
   text: string;
@@ -35,9 +33,7 @@ declare global {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Binary search helpers (pure functions, O(log n))
-// ---------------------------------------------------------------------------
+// -- Binary search helpers (pure functions, O(log n)) -----------------------
 
 /**
  * Find the rightmost segment whose start <= t.
@@ -79,9 +75,7 @@ export function binarySearchWord(words: WordTiming[], t: number): number {
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// Hook
-// ---------------------------------------------------------------------------
+// -- Hook --------------------------------------------------------------------
 
 /**
  * Syncs the active subtitle segment and word to the player's current time.
@@ -125,55 +119,68 @@ export function useSubtitleSync(
     }
 
     const tick = () => {
-      const t = player.getCurrentTime();
-
-      // Segment lookup
-      const segCandidate = binarySearchSegment(segments, t);
-      const activeSegIdx =
-        segCandidate >= 0 && t <= segments[segCandidate].end ? segCandidate : -1;
-
-      // Word lookup within active segment
-      let activeWordIdx = -1;
-      if (activeSegIdx >= 0) {
-        const words = segments[activeSegIdx].words;
-        if (words.length > 0) {
-          const wCandidate = binarySearchWord(words, t);
-          activeWordIdx =
-            wCandidate >= 0 && t <= words[wCandidate].end ? wCandidate : -1;
+      try {
+        // Guard: player may be non-null before onReady wires its methods (T09).
+        if (typeof player.getCurrentTime !== 'function') {
+          rafRef.current = requestAnimationFrame(tick);
+          return;
         }
-      }
 
-      // setState only on transitions
-      if (activeSegIdx !== prevIndexRef.current) {
-        if (import.meta.env.DEV && window.__subtitleSyncStats && activeSegIdx >= 0) {
-          const expected = segments[activeSegIdx].start;
-          window.__subtitleSyncStats.sentenceTransitions.push({
-            at: t,
-            expected,
-            delta: Math.abs(t - expected),
-          });
-        }
-        prevIndexRef.current = activeSegIdx;
-        setCurrentIndex(activeSegIdx);
-      }
+        const t = player.getCurrentTime();
 
-      if (activeWordIdx !== prevWordRef.current) {
-        if (
-          import.meta.env.DEV &&
-          window.__subtitleSyncStats &&
-          activeWordIdx >= 0 &&
-          activeSegIdx >= 0
-        ) {
+        // Segment lookup
+        const segCandidate = binarySearchSegment(segments, t);
+        const activeSegIdx =
+          segCandidate >= 0 && t <= segments[segCandidate].end ? segCandidate : -1;
+
+        // Word lookup within active segment
+        let activeWordIdx = -1;
+        if (activeSegIdx >= 0) {
           const words = segments[activeSegIdx].words;
-          const expected = words[activeWordIdx].start;
-          window.__subtitleSyncStats.wordTransitions.push({
-            at: t,
-            expected,
-            delta: Math.abs(t - expected),
-          });
+          if (words.length > 0) {
+            const wCandidate = binarySearchWord(words, t);
+            activeWordIdx =
+              wCandidate >= 0 && t <= words[wCandidate].end ? wCandidate : -1;
+          }
         }
-        prevWordRef.current = activeWordIdx;
-        setCurrentWordIndex(activeWordIdx);
+
+        // setState only on transitions
+        if (activeSegIdx !== prevIndexRef.current) {
+          if (import.meta.env.DEV && window.__subtitleSyncStats && activeSegIdx >= 0) {
+            const expected = segments[activeSegIdx].start;
+            window.__subtitleSyncStats.sentenceTransitions.push({
+              at: t,
+              expected,
+              delta: Math.abs(t - expected),
+            });
+          }
+          prevIndexRef.current = activeSegIdx;
+          setCurrentIndex(activeSegIdx);
+        }
+
+        if (activeWordIdx !== prevWordRef.current) {
+          if (
+            import.meta.env.DEV &&
+            window.__subtitleSyncStats &&
+            activeWordIdx >= 0 &&
+            activeSegIdx >= 0
+          ) {
+            const words = segments[activeSegIdx].words;
+            const expected = words[activeWordIdx].start;
+            window.__subtitleSyncStats.wordTransitions.push({
+              at: t,
+              expected,
+              delta: Math.abs(t - expected),
+            });
+          }
+          prevWordRef.current = activeWordIdx;
+          setCurrentWordIndex(activeWordIdx);
+        }
+      } catch (err) {
+        // Don't kill the loop on transient errors — log in DEV, silent in prod.
+        if (import.meta.env.DEV) {
+          console.error('[useSubtitleSync] tick error (continuing loop):', err);
+        }
       }
 
       rafRef.current = requestAnimationFrame(tick);
