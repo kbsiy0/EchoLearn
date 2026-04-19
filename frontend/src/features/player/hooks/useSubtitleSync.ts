@@ -80,7 +80,7 @@ export function useSubtitleSync(
   const rafRef = useRef<number | null>(null);
   const prevIndexRef = useRef(-1);
   const prevWordRef = useRef(-1);
-  const prevStateRef = useRef<number | null>(null);
+  const seenPauseRef = useRef(false);
   const skipSentenceRef = useRef(false);
   const skipWordRef = useRef(false);
 
@@ -88,7 +88,7 @@ export function useSubtitleSync(
     if (!player || segments.length === 0) {
       prevIndexRef.current = -1;
       prevWordRef.current = -1;
-      prevStateRef.current = null;
+      seenPauseRef.current = false;
       skipSentenceRef.current = false;
       skipWordRef.current = false;
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -114,17 +114,21 @@ export function useSubtitleSync(
 
         const t = player.getCurrentTime();
 
-        // Detect paused(2)→playing(1) flip; arm skip flags to exclude the
-        // next transition from stats (IFrame resume latency taints the delta).
+        // Track paused(2) → playing(1) across any intermediate states (e.g.
+        // buffering/3). Real IFrame sequence is 1→2→3→1, not 2→1 directly.
+        // seenPauseRef is set on state 2 and consumed on next state 1,
+        // arming skip flags so post-resume IFrame latency is excluded from stats.
         const state =
           typeof player.getPlayerState === 'function'
             ? player.getPlayerState() : null;
         if (state !== null) {
-          if (prevStateRef.current === 2 && state === 1) {
+          if (state === 2) {
+            seenPauseRef.current = true;
+          } else if (state === 1 && seenPauseRef.current) {
+            seenPauseRef.current = false;
             skipSentenceRef.current = true;
             skipWordRef.current = true;
           }
-          prevStateRef.current = state;
         }
 
         // Segment lookup
@@ -184,7 +188,7 @@ export function useSubtitleSync(
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      prevStateRef.current = null;
+      seenPauseRef.current = false;
       skipSentenceRef.current = false;
       skipWordRef.current = false;
     };
