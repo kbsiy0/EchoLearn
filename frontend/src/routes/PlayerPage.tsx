@@ -6,6 +6,7 @@ import { useYouTubePlayer } from '../features/player/hooks/useYouTubePlayer';
 import { useSubtitleSync, type Segment } from '../features/player/hooks/useSubtitleSync';
 import { useAutoPause } from '../features/player/hooks/useAutoPause';
 import { useLoopSegment } from '../features/player/hooks/useLoopSegment';
+import { usePlaybackRate } from '../features/player/hooks/usePlaybackRate';
 import { useKeyboardShortcuts } from '../features/player/hooks/useKeyboardShortcuts';
 import { computePlaybackFlags } from '../features/player/lib/flags';
 import { VideoPlayer } from '../features/player/components/VideoPlayer';
@@ -53,6 +54,7 @@ export function PlayerPage() {
   const { autoPauseEnabled, loopEnabled } = computePlaybackFlags(measure, loop);
   useAutoPause(player, segments, currentIndex, autoPauseEnabled);
   useLoopSegment(player, segments, currentIndex, loopEnabled);
+  const { rate, setRate } = usePlaybackRate(player);
 
   const isPlaying = playerState === 1;
 
@@ -150,6 +152,8 @@ export function PlayerPage() {
             loop={loop}
             currentIndex={currentIndex}
             totalSegments={segments.length}
+            rate={rate}
+            onSetRate={setRate}
           />
         </div>
       )}

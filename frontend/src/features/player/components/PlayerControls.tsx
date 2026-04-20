@@ -1,3 +1,5 @@
+import { ALLOWED_RATES, type PlaybackRate } from '../hooks/usePlaybackRate';
+
 interface PlayerControlsProps {
   onPrev: () => void;
   onNext: () => void;
@@ -8,6 +10,8 @@ interface PlayerControlsProps {
   loop: boolean;
   currentIndex: number;
   totalSegments: number;
+  rate: PlaybackRate;
+  onSetRate: (r: PlaybackRate) => void;
 }
 
 export function PlayerControls({
@@ -20,9 +24,11 @@ export function PlayerControls({
   loop,
   currentIndex,
   totalSegments,
+  rate,
+  onSetRate,
 }: PlayerControlsProps) {
   return (
-    <div className="flex items-center justify-center gap-3">
+    <div className="flex items-center justify-center gap-3 flex-wrap">
       <button
         onClick={onPrev}
         disabled={currentIndex <= 0}
@@ -61,6 +67,23 @@ export function PlayerControls({
       >
         下一句
       </button>
+      <div className="flex gap-1 ml-2">
+        {ALLOWED_RATES.map((step) => (
+          <button
+            key={step}
+            onClick={() => onSetRate(step)}
+            aria-label={`播放速度 ${step}×`}
+            aria-pressed={rate === step}
+            className={`px-3 py-2 rounded-lg text-sm transition-colors ${
+              rate === step
+                ? 'bg-blue-700 hover:bg-blue-600 text-white font-semibold'
+                : 'bg-gray-700 hover:bg-gray-600 text-white'
+            }`}
+          >
+            {step}×
+          </button>
+        ))}
+      </div>
       <span className="text-gray-400 text-sm ml-4">
         第 {totalSegments > 0 ? currentIndex + 1 : 0}/{totalSegments} 句
       </span>

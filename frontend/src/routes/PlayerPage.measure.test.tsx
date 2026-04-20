@@ -43,6 +43,11 @@ vi.mock('../features/player/hooks/useKeyboardShortcuts', () => ({
   useKeyboardShortcuts: vi.fn(),
 }));
 
+vi.mock('../features/player/hooks/usePlaybackRate', () => ({
+  usePlaybackRate: vi.fn(() => ({ rate: 1, setRate: vi.fn(), stepUp: vi.fn(), stepDown: vi.fn() })),
+  ALLOWED_RATES: [0.5, 0.75, 1, 1.25, 1.5],
+}));
+
 vi.mock('../api/subtitles', () => ({
   getSubtitles: vi.fn(() => new Promise(() => {})), // never resolves → stays in loading state
 }));
