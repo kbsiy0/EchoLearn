@@ -99,9 +99,7 @@ def create_job(body: CreateJobBody, conn: DbConn, runner: Runner):
     video_row = videos_repo.get_video(video_id)
     if video_row is not None:
         synthetic_id = str(uuid.uuid4())
-        jobs_repo.create(synthetic_id, video_id)
-        jobs_repo.update_status(synthetic_id, "completed")
-        jobs_repo.update_progress(synthetic_id, 100)
+        jobs_repo.create_completed(synthetic_id, video_id)
         return JobStatus(
             job_id=synthetic_id,
             video_id=video_id,
