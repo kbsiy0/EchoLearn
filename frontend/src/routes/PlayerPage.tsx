@@ -54,7 +54,7 @@ export function PlayerPage() {
   const { autoPauseEnabled, loopEnabled } = computePlaybackFlags(measure, loop);
   useAutoPause(player, segments, currentIndex, autoPauseEnabled);
   useLoopSegment(player, segments, currentIndex, loopEnabled);
-  const { rate, setRate } = usePlaybackRate(player);
+  const { rate, setRate, stepUp, stepDown } = usePlaybackRate(player);
 
   const isPlaying = playerState === 1;
 
@@ -104,6 +104,9 @@ export function PlayerPage() {
     onPrev: handlePrev,
     onNext: handleNext,
     onRepeat: handleRepeat,
+    onToggleLoop: handleToggleLoop,
+    onSpeedDown: stepDown,
+    onSpeedUp: stepUp,
   });
 
   if (loading) return <LoadingSpinner progress={0} status="載入字幕中..." />;
