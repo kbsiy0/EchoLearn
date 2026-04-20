@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { SubtitleSegment, SubtitleResponse } from '../types/subtitle';
 import { getSubtitles } from '../api/subtitles';
 import { useYouTubePlayer } from '../features/player/hooks/useYouTubePlayer';
@@ -28,6 +28,8 @@ function toSegments(apiSegments: SubtitleSegment[]): Segment[] {
 export function PlayerPage() {
   const { videoId } = useParams<{ videoId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const measure = searchParams.get('measure') === '1';
 
   const [subtitleData, setSubtitleData] = useState<SubtitleResponse | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -45,7 +47,7 @@ export function PlayerPage() {
 
   const { currentIndex, currentWordIndex } = useSubtitleSync(player, segments);
 
-  useAutoPause(player, segments, currentIndex, true);
+  useAutoPause(player, segments, currentIndex, !measure);
 
   const isPlaying = playerState === 1;
 
