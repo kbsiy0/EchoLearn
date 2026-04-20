@@ -60,10 +60,6 @@ class JobsRepo:
         self._conn = conn
         self._lock: threading.Lock = _lock_for(conn)
 
-    # ------------------------------------------------------------------
-    # Write methods
-    # ------------------------------------------------------------------
-
     def create(self, job_id: str, video_id: str) -> None:
         """Insert a new job row with status='queued' and progress=0."""
         _validate_video_id(video_id)
@@ -72,6 +68,18 @@ class JobsRepo:
             self._conn.execute(
                 "INSERT INTO jobs (job_id, video_id, status, progress, created_at, updated_at)"
                 " VALUES (?, ?, 'queued', 0, ?, ?)",
+                (job_id, video_id, now, now),
+            )
+            self._conn.commit()
+
+    def create_completed(self, job_id: str, video_id: str) -> None:
+        """Insert a synthetic completed row in one write (cache-hit path)."""
+        _validate_video_id(video_id)
+        now = _now()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO jobs (job_id, video_id, status, progress, created_at, updated_at)"
+                " VALUES (?, ?, 'completed', 100, ?, ?)",
                 (job_id, video_id, now, now),
             )
             self._conn.commit()
@@ -156,10 +164,6 @@ class JobsRepo:
             self._conn.commit()
         return len(rows)
 
-    # ------------------------------------------------------------------
-    # Read methods
-    # ------------------------------------------------------------------
-
     def get(self, job_id: str) -> Optional[sqlite3.Row]:
         """Return the job row or None if not found."""
         with self._lock:
@@ -180,3 +184,12 @@ class JobsRepo:
                 (video_id,),
             )
             return cursor.fetchone()
+
+    def get_active_video_ids(self) -> set[str]:
+        """Return the set of video_ids with any queued or processing job."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT DISTINCT video_id FROM jobs"
+                " WHERE status IN ('queued','processing')"
+            )
+            return {row["video_id"] for row in cursor.fetchall()}

@@ -164,9 +164,9 @@ class Pipeline:
             )
 
         finally:
-            if audio_path is not None and audio_path.exists():
+            if audio_path is not None:
                 try:
-                    audio_path.unlink()
+                    audio_path.unlink(missing_ok=True)
                 except OSError:
                     logger.warning("Failed to delete audio: %s", audio_path)
 

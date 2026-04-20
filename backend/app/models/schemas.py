@@ -58,19 +58,3 @@ class ErrorResponse(BaseModel):
     code: str
     message: str
     retryable: bool
-
-
-# ---------------------------------------------------------------------------
-# Backward-compat aliases (used by old subtitles.py router until T05 removes it)
-# ---------------------------------------------------------------------------
-
-JobCreate = CreateJobRequest  # old name → new name
-
-class SubtitleSegment(BaseModel):
-    """Legacy schema used by old subtitles.py router. Replaced by Segment in T03+."""
-    index: int
-    start: float
-    end: float
-    text_en: str
-    text_zh: str
-    words: list[WordTiming] = []

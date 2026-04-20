@@ -93,15 +93,15 @@ class JobRunner:
         """
         if not self._audio_dir.exists():
             return
+        active_ids = repo.get_active_video_ids()
         for mp3 in self._audio_dir.glob("*.mp3"):
-            video_id = mp3.stem
-            active = repo.find_active_for_video(video_id)
-            if active is None:
-                try:
-                    mp3.unlink()
-                    logger.info("startup_sweep: removed orphan audio %s", mp3.name)
-                except OSError:
-                    logger.warning("startup_sweep: could not remove %s", mp3.name)
+            if mp3.stem in active_ids:
+                continue
+            try:
+                mp3.unlink()
+                logger.info("startup_sweep: removed orphan audio %s", mp3.name)
+            except OSError:
+                logger.warning("startup_sweep: could not remove %s", mp3.name)
 
     def shutdown(self, wait: bool = True) -> None:
         """Shut down the thread pool, optionally waiting for in-flight jobs."""
