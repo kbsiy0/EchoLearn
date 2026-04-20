@@ -90,6 +90,37 @@ Phase 0 開始採 SDD（Spec-Driven Development）+ 5 個 agent：
 - **獨立的 task** → 並行（多個 implementer 同時 dispatch）
 - 依賴分析由主 session 在讀 `tasks.md` 時判斷，不詢問使用者
 
+## Simplify 流程（EchoLearn 特化）
+
+通用規範見 user CLAUDE.md「Simplify」。EchoLearn 的觸發點與 scope：
+
+### 進場時機
+
+- **每個 tdd-implementer 完成 task 後、spec-reviewer 審 code 之前**：作為 implementer 的 self-cleanup，減少 reviewer 第 N 輪修正
+- **integrator agent 跑全測試前**：最後一道價值 filter，避免把可簡化的程式碼合進 main
+- **Phase 結束、spec archive 之前**：把 refactor 過程累積的 legacy 別名、死碼、未移走的舊檔案清乾淨（Phase 0 的教訓：搬家未刪原檔 → 4 個 orphan .py 留在 `services/` 平層）
+
+### Review scope（EchoLearn 專屬 skip list）
+
+派三個 review agent 時明確排除：
+- `openspec/archive/**`（已 archive 的 spec，不是生產碼）
+- `backend/tests/**`、`frontend/src/**/*.test.*`（測試自有規範）
+- `docs/ui-verification/**`、`package-lock.json`、fixtures
+
+生產碼聚焦：`backend/app/**/*.py` + `frontend/src/**/*.{ts,tsx}`（非測試）。
+
+### EchoLearn 常見可簡化項（Phase 0 實測累積）
+
+- 重構搬家後**原檔未刪**：動過 `services/` 或 `features/` 目錄後，grep 舊路徑的 import 為 0 就該刪
+- Video ID regex / `_now()` helper 容易在各 repo 重複定義 → 集中到 `db/` 或 `lib/`
+- 工作狀態、錯誤碼的字串字面值散落多處 → 集中成 `Literal` union 或 StrEnum
+- Router 各自定義 `get_db_conn` / `DbConn` → 放到 `db/connection.py`
+- 每-request 重跑 schema DDL / PRAGMA → 移到 lifespan 啟動一次
+
+### 清理變更的分支
+
+Simplify 產出**獨立於 Phase 的 change**：開 `change/cleanup-<scope>` 分支（例：`change/cleanup-phase0-deadcode`），走 PR 合併。不搭便車塞進其他 change branch。
+
 ## Git 工作流（重要）
 
 ### 分支規則
