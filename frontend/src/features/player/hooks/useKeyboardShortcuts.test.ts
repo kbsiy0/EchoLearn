@@ -106,4 +106,106 @@ describe('useKeyboardShortcuts', () => {
     expect(onTogglePlay).not.toHaveBeenCalled();
     expect(onPrev).not.toHaveBeenCalled();
   });
+
+  it('test_l_toggles_loop', () => {
+    const onToggleLoop = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        onTogglePlay: vi.fn(),
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onRepeat: vi.fn(),
+        onToggleLoop,
+      }),
+    );
+    fireKey('L');
+    expect(onToggleLoop).toHaveBeenCalledTimes(1);
+  });
+
+  it('test_l_lowercase_toggles_loop', () => {
+    const onToggleLoop = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        onTogglePlay: vi.fn(),
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onRepeat: vi.fn(),
+        onToggleLoop,
+      }),
+    );
+    fireKey('l');
+    expect(onToggleLoop).toHaveBeenCalledTimes(1);
+  });
+
+  it('test_bracket_left_steps_down', () => {
+    const onSpeedDown = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        onTogglePlay: vi.fn(),
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onRepeat: vi.fn(),
+        onSpeedDown,
+      }),
+    );
+    fireKey('[');
+    expect(onSpeedDown).toHaveBeenCalledTimes(1);
+  });
+
+  it('test_bracket_right_steps_up', () => {
+    const onSpeedUp = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        onTogglePlay: vi.fn(),
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onRepeat: vi.fn(),
+        onSpeedUp,
+      }),
+    );
+    fireKey(']');
+    expect(onSpeedUp).toHaveBeenCalledTimes(1);
+  });
+
+  it('test_shortcuts_suppressed_in_input', () => {
+    const onToggleLoop = vi.fn();
+    const onSpeedDown = vi.fn();
+    const onSpeedUp = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        onTogglePlay: vi.fn(),
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onRepeat: vi.fn(),
+        onToggleLoop,
+        onSpeedDown,
+        onSpeedUp,
+      }),
+    );
+    const input = document.createElement('input');
+    fireKey('L', input);
+    fireKey('l', input);
+    fireKey('[', input);
+    fireKey(']', input);
+    expect(onToggleLoop).not.toHaveBeenCalled();
+    expect(onSpeedDown).not.toHaveBeenCalled();
+    expect(onSpeedUp).not.toHaveBeenCalled();
+  });
+
+  it('test_rapid_toggle_converges', () => {
+    const onToggleLoop = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        onTogglePlay: vi.fn(),
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onRepeat: vi.fn(),
+        onToggleLoop,
+      }),
+    );
+    for (let i = 0; i < 5; i++) {
+      fireKey('L');
+    }
+    expect(onToggleLoop).toHaveBeenCalledTimes(5);
+  });
 });
