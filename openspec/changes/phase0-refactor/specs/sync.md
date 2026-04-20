@@ -71,10 +71,15 @@ function useKeyboardShortcuts(options: KeyboardShortcutsOptions): void;
 - **Epsilon for end-of-segment.** Auto-pause trigger band is `segment.end ± 0.08s`, matching existing behavior.
 
 ## Observable acceptance (ui-verifier)
-- Sentence-level alignment delta p95 ≤ 100ms over a representative 3-minute video.
-- Word-level alignment delta p95 ≤ 150ms over the same video.
+- Sentence-level alignment delta p95 ≤ 100ms over a representative 3-minute video, **measured with `?measure=1` (auto-pause disabled) over ≥ 20 real IFrame segment transitions**.
+- Word-level alignment delta p95 ≤ 150ms over the same video, under the same `?measure=1` measurement condition.
+- Auto-pause correctness (fires once at `segment.end ± 0.08s` per segment) is verified independently — via `useAutoPause` Vitest tests and a ui-verifier visual assertion with `?measure=1` absent.
 - No dropped highlights (every played segment gets a highlight state at some tick).
 - No rerender storms: `useSubtitleSync` does not trigger a React rerender on ticks where both indices are unchanged (verified in Vitest).
+
+## Measurement-mode flag
+- `/watch/:videoId?measure=1` disables `useAutoPause` for the session (equivalent to passing `enabled=false` to the hook). Production default (no flag) leaves auto-pause ON.
+- Rationale: precision is an algorithm property; auto-pause resume is IFrame postMessage physics (~190ms). The flag keeps the two metrics separable. Full rationale in `design.md` → "Measurement mode (`?measure=1`)".
 
 ## Non-goals
 - Predictive scrubbing / look-ahead highlighting before a word starts.

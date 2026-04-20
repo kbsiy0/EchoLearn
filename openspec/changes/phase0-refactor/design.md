@@ -355,10 +355,18 @@ Delegated to the **`ui-verifier` agent** at `.claude/agents/ui-verifier.md`. The
 
 Every frontend-affecting task in `tasks.md` must include "dispatch ui-verifier" as a completion gate.
 
+#### Measurement mode (`?measure=1`)
+
+Sync-precision p95 numbers are collected with the URL flag `?measure=1` on `/watch/:videoId`, which **disables auto-pause** for the duration of the measurement session. Production default is auto-pause ON — the flag exists solely as a measurement vehicle.
+
+Rationale: sync precision is a property of the sync **algorithm** (RAF loop + binary search over the Whisper time base). Auto-pause resume, on the other hand, is IFrame physics — YouTube's postMessage pause→resume cycle adds ~190ms of latency that is unrelated to the algorithm. If we measure precision while auto-pause is traversing every segment boundary, every sample is contaminated by that resume latency and the "p95" number no longer describes the algorithm. Mixing both concerns into one metric has no algorithmic meaning. Therefore precision is measured on continuous playback (`?measure=1`), and auto-pause correctness is verified independently.
+
+Auto-pause correctness remains covered by (a) `useAutoPause` Vitest unit tests (fires once at `segment.end ± 0.08s`, respects the enabled flag) and (b) the ui-verifier "T07 auto-pause at segment end" visual assertion — with `?measure=1` absent, auto-pause MUST still fire exactly as specified.
+
 ### Definition of Done (project-level)
 
 - pytest + vitest + lint + production build all green
-- ui-verifier reports PASS with sentence p95 ≤ 100ms, word p95 ≤ 150ms
+- ui-verifier reports PASS with sentence p95 ≤ 100ms, word p95 ≤ 150ms, measured with `?measure=1` (auto-pause disabled) over ≥ 20 real IFrame transitions per test video
 - `backend/app/routers/subtitles.py` < 150 lines; `frontend/src/App.tsx` < 150 lines
 - Backend restart does not lose job *records*: `processing` jobs stale for ≥ threshold transition to `failed` with `INTERNAL_ERROR: server restarted during processing` (SQLite persistence verified by integration test)
 - 3-minute video processed end-to-end in ≤ 60s

@@ -242,7 +242,8 @@ Legend:
 - `useAutoPause` fires exactly once at `segment.end ± 0.08s` per segment.
 - `useKeyboardShortcuts` binds space (play/pause), ←/→ (jump ±1 segment), R (replay current segment from its start).
 - Vitest: `useSubtitleSync.test.ts` asserts binary search boundaries and that `setState` is not called when indices don't change across many raf ticks.
-- **ui-verifier dispatched on real dev servers, produces report at `docs/ui-verification/T07.md` with sentence p95 ≤ 100ms AND word p95 ≤ 150ms.** Task cannot be marked done without this report.
+- `/watch/:videoId` accepts a `?measure=1` query flag that disables `useAutoPause` for the session; without the flag, auto-pause behaves exactly as specified in `specs/sync.md`. The hook composition in `PlayerPage` must plumb the flag into `useAutoPause`'s `enabled` prop.
+- **ui-verifier dispatched on real dev servers, produces report at `docs/ui-verification/T07.md` with sentence p95 ≤ 100ms AND word p95 ≤ 150ms, measured with `?measure=1` (auto-pause disabled) over ≥ 20 real IFrame segment transitions.** Task cannot be marked done without this report. Rationale and methodology live in `design.md` → "Measurement mode (`?measure=1`)".
 - **Placeholder deletion.** `frontend/src/test/placeholders/useYouTubePlayer.ts` and `frontend/src/test/placeholders/useSubtitleSync.ts` are deleted as part of this task. After T07, `frontend/src/test/placeholders/` contains no hook files. Build-time placeholder-import guard continues to pass.
 - `App.tsx` line count verified < 150.
 
@@ -296,7 +297,8 @@ Legend:
 
 **Acceptance criteria**
 - End-to-end run against a representative 3-minute English YouTube video completes in ≤ 60 seconds from `POST /api/subtitles/jobs` to `completed`.
-- ui-verifier produces `docs/ui-verification/T09-final.md` with PASS + sentence p95 ≤ 100ms + word p95 ≤ 150ms on the same video.
+- ui-verifier produces `docs/ui-verification/T09-final.md` with PASS, sentence p95 ≤ 100ms + word p95 ≤ 150ms measured **with `?measure=1` (auto-pause disabled)** over ≥ 20 real IFrame transitions per test video, plus a separate confirmation that auto-pause STILL fires correctly at segment boundaries when `?measure=1` is absent (screenshot or visual assertion recorded in the report).
+- Frontend `/watch/:videoId?measure=1` disables auto-pause for the session; without the flag, auto-pause behaves as before. Verified in the T09 report.
 - Backend is killed mid-job and restarted; the orphan sweep marks the job `failed` with `INTERNAL_ERROR / server restarted during processing`, and resubmitting the same URL creates a fresh job that completes normally.
 - `backend/app/routers/subtitles.py` line count < 150 (verified in report).
 - `frontend/src/App.tsx` line count < 150 (verified in report).
