@@ -5,6 +5,9 @@ export interface KeyboardShortcutsOptions {
   onPrev: () => void;
   onNext: () => void;
   onRepeat: () => void;
+  onToggleLoop?: () => void;
+  onSpeedDown?: () => void;
+  onSpeedUp?: () => void;
 }
 
 /**
@@ -14,6 +17,9 @@ export interface KeyboardShortcutsOptions {
  * ←      → onPrev
  * →      → onNext
  * r / R  → onRepeat
+ * l / L  → onToggleLoop (optional)
+ * [      → onSpeedDown (optional)
+ * ]      → onSpeedUp (optional)
  *
  * Shortcuts are ignored when the event target is an input, textarea,
  * or contentEditable element (to avoid conflicts while typing).
@@ -24,6 +30,9 @@ export function useKeyboardShortcuts({
   onPrev,
   onNext,
   onRepeat,
+  onToggleLoop,
+  onSpeedDown,
+  onSpeedUp,
 }: KeyboardShortcutsOptions): void {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -54,10 +63,20 @@ export function useKeyboardShortcuts({
           e.preventDefault();
           onRepeat();
           break;
+        case 'l':
+        case 'L':
+          onToggleLoop?.();
+          break;
+        case '[':
+          onSpeedDown?.();
+          break;
+        case ']':
+          onSpeedUp?.();
+          break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onTogglePlay, onPrev, onNext, onRepeat]);
+  }, [onTogglePlay, onPrev, onNext, onRepeat, onToggleLoop, onSpeedDown, onSpeedUp]);
 }

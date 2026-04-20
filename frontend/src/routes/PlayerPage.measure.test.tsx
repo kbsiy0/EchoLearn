@@ -20,6 +20,10 @@ vi.mock('../features/player/hooks/useAutoPause', () => ({
   useAutoPause: vi.fn(),
 }));
 
+vi.mock('../features/player/hooks/useLoopSegment', () => ({
+  useLoopSegment: vi.fn(),
+}));
+
 vi.mock('../features/player/hooks/useYouTubePlayer', () => ({
   useYouTubePlayer: vi.fn(() => ({
     player: null,
@@ -37,6 +41,11 @@ vi.mock('../features/player/hooks/useSubtitleSync', () => ({
 
 vi.mock('../features/player/hooks/useKeyboardShortcuts', () => ({
   useKeyboardShortcuts: vi.fn(),
+}));
+
+vi.mock('../features/player/hooks/usePlaybackRate', () => ({
+  usePlaybackRate: vi.fn(() => ({ rate: 1, setRate: vi.fn(), stepUp: vi.fn(), stepDown: vi.fn() })),
+  ALLOWED_RATES: [0.5, 0.75, 1, 1.25, 1.5],
 }));
 
 vi.mock('../api/subtitles', () => ({
