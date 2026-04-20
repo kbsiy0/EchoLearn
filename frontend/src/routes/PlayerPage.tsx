@@ -5,7 +5,9 @@ import { getSubtitles } from '../api/subtitles';
 import { useYouTubePlayer } from '../features/player/hooks/useYouTubePlayer';
 import { useSubtitleSync, type Segment } from '../features/player/hooks/useSubtitleSync';
 import { useAutoPause } from '../features/player/hooks/useAutoPause';
+import { useLoopSegment } from '../features/player/hooks/useLoopSegment';
 import { useKeyboardShortcuts } from '../features/player/hooks/useKeyboardShortcuts';
+import { computePlaybackFlags } from '../features/player/lib/flags';
 import { VideoPlayer } from '../features/player/components/VideoPlayer';
 import { SubtitlePanel } from '../features/player/components/SubtitlePanel';
 import { PlayerControls } from '../features/player/components/PlayerControls';
@@ -31,6 +33,7 @@ export function PlayerPage() {
   const [searchParams] = useSearchParams();
   const measure = searchParams.get('measure') === '1';
 
+  const [loop, setLoop] = useState(false);
   const [subtitleData, setSubtitleData] = useState<SubtitleResponse | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,7 +50,9 @@ export function PlayerPage() {
 
   const { currentIndex, currentWordIndex } = useSubtitleSync(player, segments);
 
-  useAutoPause(player, segments, currentIndex, !measure);
+  const { autoPauseEnabled, loopEnabled } = computePlaybackFlags(measure, loop);
+  useAutoPause(player, segments, currentIndex, autoPauseEnabled);
+  useLoopSegment(player, segments, currentIndex, loopEnabled);
 
   const isPlaying = playerState === 1;
 
@@ -90,6 +95,7 @@ export function PlayerPage() {
   }, [isPlaying, playVideo, pauseVideo]);
 
   const handleClickSegment = useCallback((idx: number) => goToSegment(idx), [goToSegment]);
+  const handleToggleLoop = useCallback(() => setLoop((v) => !v), []);
 
   useKeyboardShortcuts({
     onTogglePlay: handleTogglePlay,
@@ -139,7 +145,9 @@ export function PlayerPage() {
             onNext={handleNext}
             onRepeat={handleRepeat}
             onTogglePlay={handleTogglePlay}
+            onToggleLoop={handleToggleLoop}
             isPlaying={isPlaying}
+            loop={loop}
             currentIndex={currentIndex}
             totalSegments={segments.length}
           />

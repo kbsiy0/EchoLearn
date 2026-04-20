@@ -3,7 +3,9 @@ interface PlayerControlsProps {
   onNext: () => void;
   onRepeat: () => void;
   onTogglePlay: () => void;
+  onToggleLoop: () => void;
   isPlaying: boolean;
+  loop: boolean;
   currentIndex: number;
   totalSegments: number;
 }
@@ -13,7 +15,9 @@ export function PlayerControls({
   onNext,
   onRepeat,
   onTogglePlay,
+  onToggleLoop,
   isPlaying,
+  loop,
   currentIndex,
   totalSegments,
 }: PlayerControlsProps) {
@@ -31,6 +35,18 @@ export function PlayerControls({
         className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
       >
         重複
+      </button>
+      <button
+        onClick={onToggleLoop}
+        aria-pressed={loop}
+        aria-label="循環播放"
+        className={`px-4 py-2 rounded-lg transition-colors ${
+          loop
+            ? 'bg-blue-700 hover:bg-blue-600 text-white font-semibold'
+            : 'bg-gray-700 hover:bg-gray-600 text-white'
+        }`}
+      >
+        循環
       </button>
       <button
         onClick={onTogglePlay}

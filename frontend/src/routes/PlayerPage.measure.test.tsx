@@ -20,6 +20,10 @@ vi.mock('../features/player/hooks/useAutoPause', () => ({
   useAutoPause: vi.fn(),
 }));
 
+vi.mock('../features/player/hooks/useLoopSegment', () => ({
+  useLoopSegment: vi.fn(),
+}));
+
 vi.mock('../features/player/hooks/useYouTubePlayer', () => ({
   useYouTubePlayer: vi.fn(() => ({
     player: null,
