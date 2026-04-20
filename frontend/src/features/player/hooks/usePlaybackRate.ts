@@ -1,23 +1,17 @@
 /**
- * usePlaybackRate — five-step YouTube playback speed control with persistence.
+ * Five-step YouTube playback speed with localStorage persistence.
  *
- * Reads the stored rate on mount. Applies the current rate to the player
- * whenever `player` becomes non-null AND `isReady` is true (IFrame onReady
- * has fired and all IFrame API methods are wired).
- *
- * Guards against the IFrame transient state where `new YT.Player()` has
- * returned but `onReady` has not yet fired — calling `setPlaybackRate` in
- * that window throws TypeError. The `isReady` gate ensures the effect only
- * runs when the API is fully wired. A typeof check provides defence-in-depth.
- *
- * Writes to localStorage on every change (no debounce — five legal values).
+ * Guards against the IFrame transient where `new YT.Player()` has returned
+ * but `onReady` has not fired: calling `setPlaybackRate` in that window
+ * throws. Gated on `isReady` + typeof for defence-in-depth (mirrors
+ * useSubtitleSync's guard on getCurrentTime).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { readValidated, writeString } from '../../../lib/storage';
+import { ALLOWED_RATES, type PlaybackRate } from '../lib/constants';
 
-export const ALLOWED_RATES = [0.5, 0.75, 1, 1.25, 1.5] as const;
-export type PlaybackRate = (typeof ALLOWED_RATES)[number];
+export { ALLOWED_RATES, type PlaybackRate };
 
 const STORAGE_KEY = 'echolearn.playback_rate';
 
@@ -41,21 +35,10 @@ export function usePlaybackRate(
     readValidated(STORAGE_KEY, parseRate, 1),
   );
 
-  // Track whether the player was previously null so we can detect the
-  // null → non-null transition and apply the current rate exactly once.
-  const prevPlayerRef = useRef<YT.Player | null>(null);
-
-  // Apply rate to player whenever player becomes non-null AND isReady is true.
-  // isReady in deps ensures the effect re-fires once onReady has wired methods.
-  // typeof guard provides defence-in-depth against the IFrame transient state.
   useEffect(() => {
-    if (player === null) {
-      prevPlayerRef.current = null;
-      return;
-    }
-    if (!isReady || typeof player.setPlaybackRate !== 'function') return;
+    if (!player || !isReady) return;
+    if (typeof player.setPlaybackRate !== 'function') return;
     player.setPlaybackRate(rate);
-    prevPlayerRef.current = player;
   }, [player, isReady, rate]);
 
   const setRate = useCallback((r: PlaybackRate) => {
@@ -67,7 +50,7 @@ export function usePlaybackRate(
   const stepUp = useCallback(() => {
     setRateState((prev) => {
       const idx = ALLOWED_RATES.indexOf(prev);
-      if (idx === ALLOWED_RATES.length - 1) return prev; // already at max
+      if (idx === ALLOWED_RATES.length - 1) return prev;
       const next = ALLOWED_RATES[idx + 1];
       writeString(STORAGE_KEY, String(next));
       return next;
@@ -77,7 +60,7 @@ export function usePlaybackRate(
   const stepDown = useCallback(() => {
     setRateState((prev) => {
       const idx = ALLOWED_RATES.indexOf(prev);
-      if (idx === 0) return prev; // already at min
+      if (idx === 0) return prev;
       const next = ALLOWED_RATES[idx - 1];
       writeString(STORAGE_KEY, String(next));
       return next;
