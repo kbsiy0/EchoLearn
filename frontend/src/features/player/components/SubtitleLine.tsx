@@ -1,8 +1,8 @@
 import { memo } from 'react';
-import type { SubtitleSegment } from '../types/subtitle';
+import type { Segment } from '../hooks/useSubtitleSync';
 
 interface SubtitleLineProps {
-  segment: SubtitleSegment;
+  segment: Segment;
   isActive: boolean;
   currentWordIndex: number;
   onClick: () => void;
@@ -49,7 +49,7 @@ export const SubtitleLine = memo(function SubtitleLine({
                   className={`${colorClass} transition-colors duration-150`}
                 >
                   {i > 0 ? ' ' : ''}
-                  {w.word}
+                  {w.text}
                 </span>
               );
             })

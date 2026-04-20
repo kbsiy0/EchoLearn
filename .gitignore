@@ -28,6 +28,11 @@ Thumbs.db
 backend/data/cache/
 /tmp/
 
+# SQLite database (created by first get_connection() call)
+backend/data/echolearn.db
+backend/data/echolearn.db-shm
+backend/data/echolearn.db-wal
+
 # Logs
 *.log
 npm-debug.log*

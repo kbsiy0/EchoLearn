@@ -1,11 +1,11 @@
 export interface WordTiming {
-  word: string;
+  text: string;
   start: number;
   end: number;
 }
 
 export interface SubtitleSegment {
-  index: number;
+  idx: number;
   start: number;
   end: number;
   text_en: string;
