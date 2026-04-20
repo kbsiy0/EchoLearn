@@ -1,4 +1,5 @@
-import { ALLOWED_RATES, type PlaybackRate } from '../hooks/usePlaybackRate';
+import { memo } from 'react';
+import { ALLOWED_RATES, type PlaybackRate } from '../lib/constants';
 
 interface PlayerControlsProps {
   onPrev: () => void;
@@ -14,7 +15,7 @@ interface PlayerControlsProps {
   onSetRate: (r: PlaybackRate) => void;
 }
 
-export function PlayerControls({
+export const PlayerControls = memo(function PlayerControls({
   onPrev,
   onNext,
   onRepeat,
@@ -89,4 +90,4 @@ export function PlayerControls({
       </span>
     </div>
   );
-}
+});

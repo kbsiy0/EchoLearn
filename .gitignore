@@ -49,3 +49,7 @@ htmlcov/
 *.mp3
 *.wav
 *.m4a
+
+# Tool scratch state
+.playwright-mcp/
+.claude/scheduled_tasks.lock

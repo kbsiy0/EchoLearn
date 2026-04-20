@@ -34,28 +34,24 @@ export function useLoopSegment(
     const seg = segments[currentIndex];
     if (!seg) return;
 
-    // Reset fire guard for the new segment
+    const { start, end } = seg;
+    // Degenerate segment: not enough playable room — skip RAF entirely
+    if (end - start <= 2 * AUTO_PAUSE_EPSILON) return;
+
+    const midpoint = (start + end) / 2;
+    const fireAt = end - AUTO_PAUSE_EPSILON;
+
     lastFiredIndexRef.current = -1;
 
     const tick = () => {
       const t = player.getCurrentTime();
-      const { start, end } = seg;
-
-      // Degenerate segment: not enough playable room — skip without side effects
-      if (end - start <= 2 * AUTO_PAUSE_EPSILON) {
-        rafRef.current = requestAnimationFrame(tick);
-        return;
-      }
-
-      const midpoint = (start + end) / 2;
 
       // Watermark guard-release: once t drops below midpoint, re-arm the guard
       if (lastFiredIndexRef.current === currentIndex && t < midpoint) {
         lastFiredIndexRef.current = -1;
       }
 
-      // Fire condition: at end boundary and guard not yet fired for this index
-      if (t >= end - AUTO_PAUSE_EPSILON && lastFiredIndexRef.current !== currentIndex) {
+      if (t >= fireAt && lastFiredIndexRef.current !== currentIndex) {
         lastFiredIndexRef.current = currentIndex;
         player.seekTo(start, true);
       }
