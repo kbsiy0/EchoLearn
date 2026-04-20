@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { Segment } from './useSubtitleSync';
-
-const AUTO_PAUSE_EPSILON = 0.08;
+import { AUTO_PAUSE_EPSILON } from '../lib/constants';
 
 /**
  * Fires player.pauseVideo() once when currentTime reaches segment.end ± epsilon.

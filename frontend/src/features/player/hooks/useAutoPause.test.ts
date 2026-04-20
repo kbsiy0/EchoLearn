@@ -132,6 +132,22 @@ describe('useAutoPause', () => {
     expect(pauseVideo).not.toHaveBeenCalled();
   });
 
+  it('test_enabled_false_never_pauses: enabled=false suppresses pauseVideo across ≥10 RAF ticks', async () => {
+    // With enabled=false, no RAF is started. Advance 12 ticks past seg.end - EPSILON.
+    // pauseVideo must never be called, and a second segment transition must also not fire.
+    const pauseVideo = vi.fn();
+    // time is always past the boundary — would fire if enabled=true
+    const player = makePlayer(() => SEG_A.end - EPSILON, pauseVideo);
+
+    renderHook(() => useAutoPause(player, SEGMENTS, 0, false));
+
+    for (let i = 0; i < 12; i++) {
+      await act(async () => { vi.advanceTimersByTime(16); });
+    }
+
+    expect(pauseVideo).not.toHaveBeenCalled();
+  });
+
   it('fires exactly once when time advances from seg.start to past seg.end across ≥10 RAF frames', async () => {
     // Simulates real playback: time advances frame-by-frame from start → past end.
     // The sustained RAF loop must keep sampling even without component re-renders.
