@@ -54,7 +54,7 @@ export function PlayerPage() {
   const { autoPauseEnabled, loopEnabled } = computePlaybackFlags(measure, loop);
   useAutoPause(player, segments, currentIndex, autoPauseEnabled);
   useLoopSegment(player, segments, currentIndex, loopEnabled);
-  const { rate, setRate, stepUp, stepDown } = usePlaybackRate(player);
+  const { rate, setRate, stepUp, stepDown } = usePlaybackRate(player, isReady);
 
   const isPlaying = playerState === 1;
 

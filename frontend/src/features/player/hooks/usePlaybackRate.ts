@@ -2,7 +2,14 @@
  * usePlaybackRate — five-step YouTube playback speed control with persistence.
  *
  * Reads the stored rate on mount. Applies the current rate to the player
- * whenever `player` transitions from null to non-null (IFrame ready).
+ * whenever `player` becomes non-null AND `isReady` is true (IFrame onReady
+ * has fired and all IFrame API methods are wired).
+ *
+ * Guards against the IFrame transient state where `new YT.Player()` has
+ * returned but `onReady` has not yet fired — calling `setPlaybackRate` in
+ * that window throws TypeError. The `isReady` gate ensures the effect only
+ * runs when the API is fully wired. A typeof check provides defence-in-depth.
+ *
  * Writes to localStorage on every change (no debounce — five legal values).
  */
 
@@ -21,7 +28,10 @@ function parseRate(raw: string): PlaybackRate | null {
     : null;
 }
 
-export function usePlaybackRate(player: YT.Player | null): {
+export function usePlaybackRate(
+  player: YT.Player | null,
+  isReady: boolean,
+): {
   rate: PlaybackRate;
   setRate: (r: PlaybackRate) => void;
   stepUp: () => void;
@@ -35,15 +45,18 @@ export function usePlaybackRate(player: YT.Player | null): {
   // null → non-null transition and apply the current rate exactly once.
   const prevPlayerRef = useRef<YT.Player | null>(null);
 
-  // Apply rate to player whenever player becomes non-null or rate changes.
+  // Apply rate to player whenever player becomes non-null AND isReady is true.
+  // isReady in deps ensures the effect re-fires once onReady has wired methods.
+  // typeof guard provides defence-in-depth against the IFrame transient state.
   useEffect(() => {
     if (player === null) {
       prevPlayerRef.current = null;
       return;
     }
+    if (!isReady || typeof player.setPlaybackRate !== 'function') return;
     player.setPlaybackRate(rate);
     prevPlayerRef.current = player;
-  }, [player, rate]);
+  }, [player, isReady, rate]);
 
   const setRate = useCallback((r: PlaybackRate) => {
     if (!(ALLOWED_RATES as readonly number[]).includes(r)) return;
