@@ -53,15 +53,34 @@ Legend:
 - `test_compute_schedule_first_chunk_has_no_leading_overlap` — any multi-chunk schedule: first chunk's `audio_start_sec == 0`.
 - `test_compute_schedule_last_chunk_audio_end_equals_duration` — any multi-chunk schedule: last chunk's `audio_end_sec == duration_sec`.
 - `test_compute_schedule_is_pure` — same input called twice returns equal lists.
-- `test_clip_keeps_word_that_straddles_valid_start` — `ChunkSpec(valid_start=60, valid_end=360)`, word `{start:59.5, end:60.4}` retained.
-- `test_clip_keeps_word_that_straddles_valid_end` — `ChunkSpec(valid_start=60, valid_end=360)`, word `{start:359.5, end:360.6}` retained.
-- `test_clip_drops_word_outside_both_bounds` — word fully outside either side dropped.
+- `test_clip_excludes_word_whose_start_is_at_or_before_valid_start_for_non_first_chunk` — `ChunkSpec(valid_start=60, valid_end=360, is_first=False)`, word `{start:59.5, end:60.4}` → excluded (its `start <= valid_start_sec`; belongs to previous chunk).
+- `test_clip_excludes_word_whose_start_equals_valid_start_for_non_first_chunk` — boundary equality `start == valid_start` → excluded (strict `>`).
+- `test_clip_keeps_word_whose_start_is_just_after_valid_start_for_non_first_chunk` — word `{start:60.01, end:60.5}` → retained.
+- `test_clip_first_chunk_keeps_word_at_t_zero` — `is_first=True`, word `{start:0, end:0.3}` → retained.
+- `test_clip_keeps_word_that_straddles_valid_end` — `ChunkSpec(valid_end=360)`, word `{start:359.5, end:360.6}` retained (straddling tail is OK; the next chunk's strict-greater start rule prevents duplication).
+- `test_clip_drops_word_whose_start_is_beyond_valid_end` — word `{start:361, end:361.5}` dropped.
+- `test_clip_drops_word_fully_before_valid_start_for_non_first_chunk` — word `{start:55, end:56}` dropped.
 - `test_clip_empty_words_returns_empty`.
+- `test_clip_is_partition_across_consecutive_chunks` — given two adjacent `ChunkSpec` pair and a stream of words covering their combined range, the union of clipped outputs equals the input (no drops, no duplicates).
 
 **Green implementation:**
 - `backend/app/services/transcription/audio_chunking.py` (NEW) exports `ChunkSpec` (frozen dataclass), `compute_schedule(duration_sec: float) -> list[ChunkSpec]`, `clip_to_valid_interval(words, spec) -> list[Word]`, `extract_chunk(source_audio: Path, spec: ChunkSpec, out_dir: Path) -> Path`.
 - Constants `FIRST_CHUNK_SEC=60`, `REST_CHUNK_SEC=300`, `OVERLAP_SEC=3` live in this module.
-- `extract_chunk` uses `subprocess.run(["ffmpeg", "-y", "-ss", ..., "-to", ..., "-c", "copy", ..., "-i", source, out_path])` (exact arg order per `design.md` §2; `-c copy` avoids re-encoding). Output filename is `chunk_{idx:02d}.mp3`.
+- `extract_chunk` uses the canonical command per `design.md` §2:
+  ```python
+  subprocess.run(
+      ["ffmpeg", "-y",
+       "-ss", f"{spec.audio_start_sec}",
+       "-to", f"{spec.audio_end_sec}",
+       "-i", str(source_audio),
+       "-c", "copy",
+       "-avoid_negative_ts", "make_zero",
+       str(out_path)],
+      check=True,
+  )
+  ```
+  Output filename `chunk_{idx:02d}.mp3`. `-to` (absolute end time), not `-t` (duration). `-ss` before `-i` is intentional (fast input-seek); `-avoid_negative_ts make_zero` aligns output t=0 with `audio_start_sec` so Whisper's local timestamps map cleanly to video-absolute via `spec.audio_start_sec + whisper_t`.
+- **`out_dir` is caller-provided, not validated here.** The pipeline owns path safety: it passes `Path("data/audio") / f"chunks_{video_id}"` where `video_id` is already regex-validated by `videos_repo._validate_video_id`. `audio_chunking` trusts the caller.
 - `compute_schedule` handles: `duration_sec <= FIRST_CHUNK_SEC` → single chunk; `FIRST_CHUNK_SEC < duration_sec <= FIRST_CHUNK_SEC + REST_CHUNK_SEC` → two chunks; longer → 1 + ceil((duration − FIRST)/REST) chunks with overlap rules from §2.
 
 **Refactor note:** if the schedule-computation cases grow beyond ~80 LOC, extract a private `_build_chunk(...)` helper to keep the public function readable.
@@ -78,7 +97,7 @@ Legend:
 - tdd-implementer
 - spec-reviewer
 
-**Decision (resolved):** trust ffmpeg's non-zero exit code. A failed `subprocess.run(..., check=True)` will raise `CalledProcessError` which bubbles as a non-retry-eligible error; no extra size-check wrapper needed. spec-reviewer may revisit if real-world ffmpeg flakiness later motivates defensive hardening.
+**Decision (resolved):** trust ffmpeg's non-zero exit code (`subprocess.run(..., check=True)` raises `CalledProcessError` → non-retry-eligible at pipeline layer). No extra size-check. `out_dir` safety rests with the pipeline caller (see "Files touched" — `audio_chunking.py` does no path validation).
 
 ---
 
@@ -167,14 +186,31 @@ Legend:
 - `test_get_video_view_internal_consistency` — method executes in one transaction (can be asserted by spying on `conn.execute` and ensuring no intermediate `COMMIT`).
 - Decision-table coverage (one assertion per row of the table in `design.md` §5 / `subtitles-api.md`).
 
-**Red test (callers):**
-- Search-and-replace for `publish_video` call sites in tests: the Phase 0 `test_pipeline_golden.py` will break; that's expected (it is rewritten in T06). Flag the break but don't fix in T04.
+**Red test (callers — migrated in T04 itself):**
+- `publish_video` callers beyond the pipeline must be migrated in this task to keep the green bar:
+  - `backend/tests/integration/test_jobs_api.py` (3 call sites around lines 135, 206, 309)
+  - `backend/tests/integration/test_videos_list.py` (1 call site around line 40)
+  - Search-and-replace pattern: `publish_video(video_id=..., title=..., duration_sec=..., source=..., segments=[...])` → call `upsert_video_clear_segments(video_id, title, duration_sec, source)` then `append_segments(video_id, segments)`.
+- `test_pipeline_golden.py` and `test_pipeline_failures.py` still break; those are rewritten in T06 (flag but do not fix in T04).
 
 **Green implementation:**
 - `backend/app/repositories/videos_repo.py` (MODIFIED):
   - Delete `publish_video`.
   - Add `upsert_video_clear_segments`, `append_segments`, `get_video_view` per signatures in `design.md` §6.
   - Reuse existing `DbConn` / connection handling; do not open new connections.
+  - **`get_video_view` transaction**: wrap the three reads in an explicit transaction:
+    ```python
+    self._conn.execute("BEGIN DEFERRED")
+    try:
+        job_row = ...    # SELECT from jobs
+        video_row = ...  # SELECT from videos
+        segment_rows = ... # SELECT from segments
+        self._conn.execute("COMMIT")
+    except Exception:
+        self._conn.execute("ROLLBACK")
+        raise
+    ```
+    Rationale: SQLite WAL + autocommit does not snapshot across SELECTs.
 - File must remain ≤ 200 LOC. If the three new methods push it over, extract the decision-table shaping logic into a private `_view_row_to_dict` helper or move `get_video_view` into a separate reader module.
 
 **Refactor note:** if decision-table branching exceeds ~50 LOC, extract it to `_assemble_view(jobs_row, videos_row, segments_rows) -> dict`.
@@ -186,12 +222,18 @@ Legend:
 **Files touched**
 - `backend/app/repositories/videos_repo.py`
 - `backend/tests/unit/test_repositories_videos.py`
+- `backend/tests/integration/test_jobs_api.py` (migrate `publish_video` call sites)
+- `backend/tests/integration/test_videos_list.py` (migrate `publish_video` call site)
 
 **Required agents**
 - tdd-implementer
 - spec-reviewer
 
 **Decision (resolved):** align the outer view dict's key names exactly with `SubtitleResponse` pydantic field names (`video_id`, `status`, `progress`, `title`, `duration_sec`, `segments`, `error_code`, `error_message`) so the router body reduces to `SubtitleResponse(**view)`. For the inner `segments` list, keep the ORM dict keys (`start_sec`, `end_sec`, `words_json`, etc.) as the router already converts them to `Segment` pydantic; do not double-shape inside the repo.
+
+**Additional Red tests for `get_video_view` transaction:**
+- `test_get_video_view_opens_begin_deferred` — spy on `conn.execute`; assert the calls in order are `BEGIN DEFERRED` → three SELECTs → `COMMIT`.
+- `test_get_video_view_emits_rollback_on_read_error` — inject a failing second SELECT; assert `ROLLBACK` fires and the exception re-raises.
 
 ---
 
@@ -238,6 +280,14 @@ Legend:
 - `test_chunk_retry_twice_then_succeeds` — fake whisper raises `WhisperTransientError` on attempts 1-2 for chunk 2, succeeds on attempt 3; job completes; all segments appended.
 - `test_chunk_three_failures_marks_job_failed_with_partial` — fake whisper raises `WhisperTransientError` three times on chunk 3; job ends `failed` with `error_code="WHISPER_ERROR"`; segments from chunks 0-2 remain in DB.
 - `test_non_retry_eligible_error_bubbles_on_first_occurrence` — fake whisper raises an HTTP-4xx-non-429 on chunk 1; pipeline fails immediately (no retry delay).
+- `test_rate_limit_with_retry_after_header_honored` — fake whisper raises `WhisperTransientError` with `retry_after=5` on first attempt; assert the pipeline sleeps ~5s (within tolerance) before the second attempt, not the default 1s.
+- `test_rate_limit_retry_after_cap` — fake whisper raises `WhisperTransientError` with `retry_after=120`; assert the pipeline sleeps at most 30s (cap).
+- `test_silent_chunk_empty_whisper_does_not_crash_pipeline` — fake whisper returns `[]` for chunk 2 (mid-video silence); carryover is empty from chunk 1; pipeline MUST NOT raise — it emits no segments for chunk 2, advances progress, continues to chunk 3 normally.
+- `test_silent_chunk_preserves_carryover` — fake whisper returns `[]` for chunk 2 but carryover from chunk 1 is non-empty (open sentence); carryover buffer carries through intact to chunk 3's combine step.
+- `test_chunk_timestamps_are_video_absolute_not_local` — fake whisper returns chunk-local words (chunk starts at `audio_start_sec=57`, Whisper returns word at local `start=0.5`); assert the DB segment's word has `start=57.5` (offset applied), not `0.5`.
+- `test_update_progress_is_noop_after_failed` — after a job transitions to `failed`, any subsequent `update_progress` (from a late-arriving callback, say) is a no-op and the row's progress column does not move.
+- `test_error_message_is_sanitized` — fake whisper raises an exception whose `str()` contains `"Incorrect API key provided: sk-ab..."`; assert `jobs.error_message` in the DB contains the Chinese canonical string from `_SAFE_MESSAGES["WHISPER_ERROR"]` and NOT the raw `sk-` fragment. Assert the raw exception text appears in captured log records only.
+- `test_chunk_dir_is_under_data_audio` — spy on `extract_chunk`'s `out_dir` argument; assert it equals `Path("data/audio") / f"chunks_{video_id}"`. Assert the directory is removed on both success and failure.
 - `test_sentence_held_across_boundary_preserves_original_timestamps` — fake whisper emits an open sentence at end of chunk 0, terminator at start of chunk 1; final segment's word timestamps come from chunk 0's emission.
 - `test_no_duplicate_word_at_chunk_boundary` — word with `start=59.8, end=60.3`; appears in exactly one DB row after pipeline.
 - `test_end_of_stream_flushes_unterminated_final_sentence` — final chunk's words end without `.!?`; pipeline still appends the tail via `segment()` end-of-stream path.
@@ -253,13 +303,21 @@ Legend:
   1. `probe_metadata` (progress=5; VIDEO_TOO_LONG raised here).
   2. `upsert_video_clear_segments(video_id, meta)`.
   3. `download_audio` (progress=15).
-  4. `specs = compute_schedule(duration_sec)`.
-  5. `carryover_buffer: list[Word] = []`; `next_segment_idx = 0`.
-  6. For each `spec` in `specs`: attempt Whisper up to 3 times with 1s/2s backoff on `WhisperTransientError`; on success, `clip_to_valid_interval`, combine with carryover, `segment`, `split_last_open_sentence`, `translate_batch` on emitted only, assign monotone `idx`, `append_segments`, update progress via `_compute_progress(chunk_idx, total)`; on exhausted retries raise `PipelineError("WHISPER_ERROR", ...)`.
-  7. After loop: if `carryover_buffer` non-empty, `segment` + `translate_batch` + `append_segments` the tail.
-  8. `mark_job_completed`; delete audio files unconditionally.
+  4. `chunk_dir = Path("data/audio") / f"chunks_{video_id}"` (create the directory; `video_id` is already regex-validated by `videos_repo._validate_video_id`).
+  5. `specs = compute_schedule(duration_sec)`.
+  6. `carryover_buffer: list[Word] = []`; `next_segment_idx = 0`.
+  7. For each `spec` in `specs`:
+     - Attempt Whisper up to 3 times. After each Whisper call, **offset chunk-local timestamps to video-absolute**: `w["start"] += spec.audio_start_sec`, same for `end`. Then `clip_to_valid_interval`.
+     - Backoff on `WhisperTransientError`: **if `retry_after` attribute present** (RateLimitError), sleep `min(retry_after, 30)` seconds; otherwise default 1s / 2s for attempts 1 / 2. On exhausted retries raise `PipelineError("WHISPER_ERROR", ...)`.
+     - Combine: `combined = carryover_buffer + clipped`. **Silent-chunk guard:** `if combined: segments = segment(combined); split_last_open_sentence(...); ...` else `emit, carryover_buffer = [], []`.
+     - Translate `emit` only (held sentences are NOT translated yet), assign monotone `idx`, `append_segments`, update progress via `_compute_progress(chunk_idx, total)`.
+  8. After loop: if `carryover_buffer` non-empty, `segment` + `translate_batch` + `append_segments` the tail. For single-chunk runs, progress is already 100 after step 7; this tail-flush does not advance progress and that is intentional.
+  9. `mark_job_completed`; delete `source_audio` AND `chunk_dir` recursively, unconditionally.
 - `_compute_progress(chunk_idx, total_chunks) -> int` is a private helper on the pipeline module: `return 15 + (chunk_idx + 1) * 85 // total_chunks`.
-- File must remain ≤ 200 LOC. If the loop body exceeds reasonable size, extract `_process_chunk(spec, ctx) -> tuple[list[Segment], list[Word]]` into the same module.
+- **Error sanitization:** introduce module-level `_SAFE_MESSAGES: dict[str, str]` per `design.md` §5. Every `update_status(job_id, "failed", error_code=..., error_message=...)` call site MUST resolve `error_message` via `_SAFE_MESSAGES[error_code]`. Raw exception text goes to `logger.warning` only.
+- **`update_progress` status guard** (tightens Phase 0's monotone-only guard to also check status): extend `JobsRepo.update_progress` SQL to `WHERE job_id=? AND progress<=? AND status NOT IN ('failed','completed')`. This is a small change in `backend/app/repositories/jobs_repo.py`; add a unit test in `backend/tests/unit/test_repositories_jobs.py` asserting a `failed` job's progress does not advance.
+- **`WhisperTransientError` classification** (expanded open-question decision): see the dedicated block below. T06 also adds the error class and its unit tests.
+- **200-LOC ceiling:** if `pipeline.py` crosses 200 LOC after rewrite, pre-authorized split: convert `backend/app/services/pipeline.py` into a package `backend/app/services/pipeline/__init__.py` + `backend/app/services/pipeline/_chunk_loop.py` (holds the per-chunk loop body + `_process_chunk` + `_transcribe_with_retry`). Imports elsewhere in the codebase continue to work via `__init__.py` re-exports. Do the split as a second commit within T06.
 
 **Refactor note:** ensure `Pipeline.run` itself (top-level) stays readable; move retry logic into a `_transcribe_with_retry(spec, audio_dir)` private helper if it crosses ~20 LOC inline.
 
@@ -268,20 +326,24 @@ Legend:
 - **Suggested commit:** `refactor(pipeline): per-chunk streaming with carryover and retry`
 
 **Files touched**
-- `backend/app/services/pipeline.py`
+- `backend/app/services/pipeline.py` (REWRITTEN; may split to a `pipeline/` package if > 200 LOC)
+- `backend/app/services/transcription/whisper.py` (adds `WhisperTransientError` + classification)
+- `backend/app/repositories/jobs_repo.py` (tightens `update_progress` SQL to check `status`)
 - `backend/tests/integration/test_pipeline_streaming.py` (NEW)
 - `backend/tests/integration/test_pipeline_golden.py` (assertions migrated to new repo pair)
 - `backend/tests/integration/test_pipeline_failures.py` (same)
+- `backend/tests/unit/test_whisper_client.py` (NEW)
+- `backend/tests/unit/test_repositories_jobs.py` (adds `test_update_progress_noop_on_failed`)
 
 **Required agents**
 - tdd-implementer
 - spec-reviewer
 
 **Decision (resolved):** option (a) — `whisper.py` is the classification site. T06's scope officially includes:
-1. Define `WhisperTransientError(Exception)` in `backend/app/services/transcription/whisper.py`.
-2. Inside `WhisperClient.transcribe`, wrap the `client.audio.transcriptions.create(...)` call in `try/except`; re-raise as `WhisperTransientError` when the underlying exception is any of: `openai.APIConnectionError`, `openai.APITimeoutError`, `openai.RateLimitError` (HTTP 429), or an `openai.APIStatusError` with `status_code >= 500`.
+1. Define `WhisperTransientError(Exception)` in `backend/app/services/transcription/whisper.py`. The class MUST preserve a `retry_after: Optional[float]` attribute so `RateLimitError`s with `Retry-After` headers can be honored by the pipeline (if the underlying `openai.RateLimitError` carries `retry_after`, copy it onto the wrapper; otherwise `None`).
+2. Inside `WhisperClient.transcribe`, wrap the `client.audio.transcriptions.create(...)` call in `try/except`; re-raise as `WhisperTransientError(retry_after=…)` when the underlying exception is any of: `openai.APIConnectionError`, `openai.APITimeoutError`, `openai.RateLimitError` (HTTP 429, copy `retry_after`), or an `openai.APIStatusError` with `status_code >= 500`.
 3. Any other exception (HTTP 4xx non-429, bad audio path, ffmpeg-not-found raised during audio open, etc.) re-raises as-is and is non-retry-eligible at the pipeline layer.
-4. Add unit tests in `backend/tests/unit/test_whisper_client.py` (NEW if missing): one case per transient error class asserting `WhisperTransientError` is raised; one case for a 400 asserting the original exception passes through.
+4. Add unit tests in `backend/tests/unit/test_whisper_client.py` (NEW): one case per transient error class asserting `WhisperTransientError` is raised; one case for a 400 asserting the original exception passes through; one case for `RateLimitError(retry_after=5)` asserting the wrapper carries the attribute.
 
 Files touched (updated): also add `backend/app/services/transcription/whisper.py` and `backend/tests/unit/test_whisper_client.py`.
 
@@ -375,13 +437,17 @@ Files touched (updated): also add `backend/app/services/transcription/whisper.py
 - `test_in_flight_fetch_discarded_after_unmount` — slow-response mock; unmount before it resolves; no state update fired.
 - `test_transient_error_surfaces_but_does_not_stop_polling` — mock rejects once, then resolves; assert `error` populated then cleared (or `data` updated regardless).
 - `test_videoId_change_restarts_polling` — prop changes from `"a"` to `"b"`; old interval cleared; new initial fetch fires.
+- `test_stops_polling_after_completed` — mock returns `status="completed"` on the first response; advance timers 5s; assert exactly ONE fetch fired (initial), no additional interval calls.
+- `test_stops_polling_after_failed` — mock returns `status="failed"`; same terminal-stop behavior.
+- `test_no_memory_leak_on_terminal_then_unmount` — after terminal stop, unmount the component; assert cleanup still clears any residual interval (defensive).
 
 **Green implementation:**
 - `frontend/src/features/player/hooks/useSubtitleStream.ts` (NEW) implements per `design.md` §7:
   - Signature `(videoId: string | null) => { data, error }`.
   - `useEffect(... [videoId])`: immediate first fetch, then `setInterval(tick, 1000)`.
   - `cancelled` flag to prevent state-after-unmount.
-  - Cleanup: `cancelled = true; clearInterval(id)`.
+  - **Terminal-stop:** inside `tick`, after `setData(resp)`, if `resp.status === 'completed' || resp.status === 'failed'`, `clearInterval(intervalId); intervalId = null`. This bounds total polls for a normal-case 3-minute job at ~180 requests (rather than unbounded until tab close).
+  - Cleanup: `cancelled = true; if (intervalId !== null) clearInterval(intervalId)`.
 - File ≤ 80 LOC.
 
 **Refactor note:** none expected — small hook.
@@ -494,6 +560,11 @@ Files touched (updated): also add `backend/app/services/transcription/whisper.py
 - `test_completed_polls_do_not_remount_player` — subsequent polls after `completed` do not trigger additional mounts.
 - `test_progress_observed_by_user_is_monotone` — scripted progress `[10, 25, 45, 100]`; each `ProcessingPlaceholder` render's text shows a value ≥ the previous.
 - `test_measure_flag_preserved_through_completed_branch` — URL `?measure=1` + `status="completed"` → `computePlaybackFlags` call path unchanged from Phase 1a (auto-pause off, loop off).
+- `test_sticky_completed_guards_against_later_processing` — scripted hook sequence: `completed → processing → failed`; the component stays mounted on `<CompletedLayout>` using its last-seen completed data; player is not unmounted.
+- `test_sticky_completed_preserves_playback_position_on_resubmit_downgrade` — soft version of above: simulate the hook reverting to `processing`; assert `<VideoPlayer>` component instance is the same across renders (React key / ref preserved).
+- `test_ttfs_event_fires_once_on_first_segment_appearance` — scripted sequence `segments=[]` (processing) → `segments=[s0]` (processing); spy on `window.dispatchEvent`; assert exactly one call with `type === 'el:first-segment'` and `detail.t` is a finite `performance.now()` value.
+- `test_ttfs_event_does_not_refire_on_subsequent_segment_appends` — after first-segment event fires, scripted `segments=[s0,s1]` → `segments=[s0,s1,s2]`; assert no additional `el:first-segment` dispatches.
+- `test_ttfs_event_does_not_fire_on_pure_completed_mount` — cache-hit flow: first data arrives as `status="completed"` with full segments; TTFS event does NOT fire (we only instrument the processing path; a cached video has no TTFS to measure).
 
 **Red tests (existing coverage — must stay green):**
 - `frontend/src/routes/PlayerPage.measure.test.tsx` — after T12, the test must still pass against the completed-branch code path. If the test references the old Phase 0 `GET /subtitles` 404-then-completed flow, the MSW handler is updated to return the new streaming shape with `status="completed"` on first poll.
@@ -501,7 +572,9 @@ Files touched (updated): also add `backend/app/services/transcription/whisper.py
 **Green implementation:**
 - `frontend/src/routes/PlayerPage.tsx` (MODIFIED) per `design.md` §7:
   - Top-level `const { data } = useSubtitleStream(videoId)`.
-  - Branch on `data == null` → loading; `queued | processing` → `ProcessingLayout`; `failed` → `ProcessingLayout` with error; `completed` → `CompletedLayout`.
+  - **Sticky-completed guard**: a `sawCompletedRef = useRef(false)` + a `const [lastCompletedData, setLastCompletedData] = useState<SubtitleResponse | null>(null)`. When `data?.status === 'completed'`, flip `sawCompletedRef.current = true` and `setLastCompletedData(data)`. The render decision uses `const effectiveData = sawCompletedRef.current && lastCompletedData ? lastCompletedData : data` and branches on `effectiveData.status`.
+  - **TTFS instrumentation**: `useEffect(() => { if (data?.status === 'processing' && data.segments.length > 0 && !ttfsFiredRef.current) { window.dispatchEvent(new CustomEvent('el:first-segment', { detail: { t: performance.now() } })); ttfsFiredRef.current = true; } }, [data])`. The ref lives for the page lifecycle and resets on unmount.
+  - Branch on `effectiveData == null` → loading; `queued | processing` → `ProcessingLayout`; `failed` → `ProcessingLayout` with error; `completed` → `CompletedLayout`.
   - `ProcessingLayout` and `CompletedLayout` are defined as local components in `PlayerPage.tsx` (or extracted to sibling files if `PlayerPage.tsx` exceeds 200 LOC).
   - `CompletedLayout` contains the full Phase 1a tree: `<VideoPlayer>`, `<SubtitlePanel>` with highlight, `<PlayerControls>` with loop+speed+keyboard wiring.
   - The `?measure=1` read and `computePlaybackFlags` call happen inside `CompletedLayout` only.
@@ -534,13 +607,13 @@ Files touched (updated): also add `backend/app/services/transcription/whisper.py
 - **Parallel-eligible with:** none
 
 **Acceptance criteria**
-- `cd backend && python -m pytest` green (all units + integrations, including new `test_audio_chunking.py`, `test_sentence_carryover.py`, `test_pipeline_streaming.py`, `test_subtitles_router_streaming.py`, migrated `test_pipeline_golden.py` and `test_pipeline_failures.py`, untouched `test_repositories_jobs.py`, `test_jobs_api.py`, etc.).
+- `cd backend && python -m pytest` green (all units + integrations, including new `test_audio_chunking.py`, `test_sentence_carryover.py`, `test_pipeline_streaming.py`, `test_subtitles_router_streaming.py`, `test_whisper_client.py`, migrated `test_pipeline_golden.py`, `test_pipeline_failures.py`, `test_jobs_api.py`, `test_videos_list.py`, extended `test_repositories_jobs.py` (new `update_progress` guard assertions)).
 - `cd frontend && npx vitest run` green (all suites including `useSubtitleStream.test.ts`, `ProcessingPlaceholder.test.tsx`, `HomePage.test.tsx`, `PlayerPage.streaming.test.tsx`, untouched `useSubtitleSync.*`, `useLoopSegment.test.ts`, `usePlaybackRate.test.ts`, `useAutoPause.test.ts`, `useKeyboardShortcuts.test.ts`, `PlayerPage.measure.test.tsx`).
 - `cd frontend && npm run lint` clean.
 - `cd frontend && npm run build` succeeds.
 - **200-line scan** — no `.py`/`.ts`/`.tsx` file over 200 lines across `backend/app` + `frontend/src`.
 - ui-verifier agent boots real dev servers (backend on 8000, frontend on 5173), drives Playwright through the Phase 1b flows, and produces `docs/ui-verification/phase1b-segment-streaming.md` with PASS on:
-  - **TTFS (time-to-first-subtitle).** For a 20-minute English video fixture, p50 ≤ 15s from `createJob` response to the first segment visible in `SubtitlePanel`. Report p50 and p95.
+  - **TTFS (time-to-first-subtitle).** For a 20-minute English video fixture, p50 ≤ 15s from `createJob` response to the first segment visible in `SubtitlePanel`. Report p50 and p95. ui-verifier's Playwright script installs a `page.addInitScript(() => { window.addEventListener('el:first-segment', (e) => (window as any).__el_ttfs_t = e.detail.t); })` before navigation; after submit, waits for the event, and computes `TTFS = window.__el_ttfs_t - submit_start_t` (both readings taken with `performance.now()`).
   - **Completion SLO.** 20-minute English video processes end-to-end in ≤ 3 minutes (p95 across 5 runs).
   - **Sync precision preserved on completed.** After `status="completed"` and the user presses play, sentence p95 ≤ 100ms and word p95 ≤ 150ms using the `?measure=1` flow from Phase 1a. This is a regression check, not a new metric.
   - **Processing state no-player.** While `status="processing"`, assert no `<iframe>` (YouTube player) exists in the DOM.
@@ -568,13 +641,34 @@ Files touched (updated): also add `backend/app/services/transcription/whisper.py
 
 ## Open questions — all resolved
 
-Every open question raised during spec-writer's first pass has been decided at the spec gate (before T01 starts). Decisions are recorded inline in the affected task's section; this summary is the pointer.
+Every open question has been decided at the spec gate (before T01 starts). Decisions are recorded inline in the affected task's section; this summary is the pointer.
+
+### From spec-writer's first pass
 
 1. **T01 (ffmpeg output verification):** trust exit code.
 2. **T02 (quote-strip rule placement):** default replicate with source-of-truth comment; extract during refactor if duplication grows.
 3. **T04 (view dict shape):** align outer keys with `SubtitleResponse` pydantic fields; inner segment dicts stay ORM-shaped.
-4. **T06 (`WhisperTransientError` site):** `whisper.py` is the classification site; T06 scope includes adding the class + unit tests.
+4. **T06 (`WhisperTransientError` site):** `whisper.py` is the classification site; T06 scope includes adding the class + unit tests; wrapper preserves `retry_after` attribute.
 5. **T11 (`useJobPolling.ts` deletion):** leave on disk; defer to a future simplify pass.
 6. **T12 (layout extraction):** start inline; extract only if 200-LOC ceiling forces it.
 
-No open questions remain for implementer dispatch. If spec-reviewer raises new ones during the spec review pass, append them here with their resolution before implementation begins.
+### Absorbed from spec-reviewer's gate-(1) findings
+
+All spec-reviewer findings (3 blockers + 8 majors + 6 minors) were absorbed into proposal.md / design.md / specs/*.md / tasks.md. Decisions that affect task scope:
+
+- **A1 — `update_progress` status guard:** T06 tightens `JobsRepo.update_progress` SQL to `status NOT IN ('failed','completed')`; adds `test_repositories_jobs.py` coverage.
+- **A2 — callers migration:** T04 Files-touched now includes `test_jobs_api.py` + `test_videos_list.py`.
+- **A3 — ffmpeg canonical command:** `-ss X -to Y -i S -c copy -avoid_negative_ts make_zero OUT`; pipeline offsets chunk-local → video-absolute before clipping.
+- **A4 — pipeline package split:** T06 pre-authorizes `services/pipeline/__init__.py` + `_chunk_loop.py` if 200 LOC crossed.
+- **A5 — `BEGIN DEFERRED`:** T04 adds explicit transaction around `get_video_view` reads + tests.
+- **Q1 + Q3 — asymmetric clip:** `start > valid_start` for non-first chunks; partition tests added.
+- **Q2 — silent chunk guard:** `if combined:` before `segment(...)`; new Red test.
+- **Q4 — TTFS instrumentation:** `PlayerPage` dispatches `el:first-segment` CustomEvent once; ui-verifier listens; design §8 invariant 9 codifies.
+- **Q5 — Retry-After honored:** `WhisperTransientError.retry_after` attribute drives sleep (capped at 30s).
+- **Q6 — sticky-completed guard:** `PlayerPage` freezes on completed layout once observed; design §8 invariant 7.
+- **Q8 — terminal-stop polling:** `useSubtitleStream` clears interval on first terminal response.
+- **S1 — chunk_dir safety:** pipeline uses `Path("data/audio") / f"chunks_{video_id}"`; directory deleted unconditionally.
+- **S2 — error message sanitization:** `_SAFE_MESSAGES` mapping; raw exceptions to logs only.
+- **Minors A6, Q7, S3, S4:** documented in design.md §2 / §3 / proposal.md Risks; no task scope change.
+
+No open questions remain for implementer dispatch.

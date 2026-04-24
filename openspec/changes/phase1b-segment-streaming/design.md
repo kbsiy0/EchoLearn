@@ -116,29 +116,55 @@ Rules (enforced by `compute_schedule`):
 
 ```python
 def extract_chunk(source_audio: Path, spec: ChunkSpec, out_dir: Path) -> Path:
-    """ffmpeg -ss audio_start -to audio_end -c copy out_dir/chunk_{idx}.mp3"""
+    """Extract one chunk's audio slice. Canonical command:
+
+    ffmpeg -y -ss {spec.audio_start_sec} -to {spec.audio_end_sec}
+           -i {source_audio} -c copy -avoid_negative_ts make_zero {out_path}
+
+    Flag rationale:
+    - `-ss` before `-i`: fast input-seek.
+    - `-to` (absolute end time) instead of `-t` (duration): the audio_end is
+      already absolute; -t would re-derive it and risk off-by-frame drift.
+    - `-c copy`: no re-encoding; preserves audio byte-accurately for Whisper.
+    - `-avoid_negative_ts make_zero`: forces the output's t=0 to align with
+      audio_start_sec. Without this, mp3 frame-boundary snapping of `-ss`
+      would shift the output's reported t=0 by up to ~26ms (one frame at
+      common bitrates). With it, word `start`/`end` values reported by
+      Whisper can be safely offset as `spec.audio_start_sec + whisper_t`
+      to recover the original video timeline.
+    """
 ```
 
-- `-c copy` avoids re-encoding (fast, byte-accurate for mp3 frame boundaries; good enough for Whisper).
 - Output filename is `chunk_{idx:02d}.mp3` so retry can overwrite idempotently.
+- **`out_dir` is caller-provided and MUST be a trusted path.** `extract_chunk` does NOT validate the path. The pipeline's canonical `out_dir` is `Path("data/audio") / f"chunks_{video_id}"` where `video_id` is regex-validated in `videos_repo._validate_video_id`.
+- Implementation uses `subprocess.run(..., check=True)`; a non-zero ffmpeg exit raises `CalledProcessError`, which bubbles up as a non-retry-eligible failure at the pipeline layer.
 
 ### Overlap clipping
 
-After Whisper returns `words: list[Word]` for a chunk, apply:
+After Whisper returns `words: list[Word]` for a chunk (with timestamps already offset from chunk-local to video-absolute), apply:
 
 ```python
 def clip_to_valid_interval(words: list[Word], spec: ChunkSpec) -> list[Word]:
-    return [
-        w for w in words
-        if w["end"] >= spec.valid_start_sec and w["start"] <= spec.valid_end_sec
-    ]
+    # Asymmetric boundary: words BELONG to exactly one chunk.
+    # Non-first chunks exclude words whose start is at or before valid_start
+    # (those belong to the previous chunk). First chunk keeps everything
+    # from t=0.
+    def in_valid(w):
+        start_ok = True if spec.is_first else w["start"] > spec.valid_start_sec
+        end_ok   = w["start"] <= spec.valid_end_sec  # straddle at tail is OK
+        return start_ok and end_ok
+    return [w for w in words if in_valid(w)]
 ```
 
-**Why `>=` and `<=` rather than strict:** a word that *crosses* the valid boundary is still content we want; we just don't want duplicates. The next-chunk or previous-chunk's valid interval will exclude the same word on its side (mirror-image clip), so net effect is one copy kept.
+**The rule, stated plainly:**
 
-**Border case — word straddles two valid intervals:** a word with `start=59.5, end=60.4` qualifies for both chunk 0's `valid_end=60` (because `start=59.5 <= 60`) and chunk 1's `valid_start=60` (because `end=60.4 >= 60`). To avoid duplication, the rule resolves to **first writer wins**: chunk 0 emits it; chunk 1's segmenter receives a carryover buffer that already has this word (via sentence carryover, §4), so the duplicate is implicitly deduped by sentence grouping. We do not need an explicit dedup pass.
+- A word is assigned to the earliest chunk whose `valid_start_sec < w["start"] <= valid_end_sec`.
+- First chunk: words with `w["start"] <= valid_end_sec` are kept (including the word at `start=0`).
+- All later chunks: a word is kept only if `w["start"] > valid_start_sec` — i.e., words whose start lies *strictly after* the boundary. Equality goes to the previous chunk.
 
-(In practice this is rare — Whisper tokenizes on word boundaries and rarely emits words that straddle a second-boundary by more than 100ms. The sentence carryover mechanism handles it as a side effect.)
+**Why asymmetric rather than symmetric:** a symmetric rule (`>=` on both sides) lets a boundary-terminating sentence emit the terminal word in *both* chunks — `world.` at `[59.8, 60.3]` ending a sentence, chunk 0 emits and chunk 1 re-emits (the sentence already terminated, so sentence carryover cannot dedupe). The asymmetric rule makes chunk-assignment a partition: every word belongs to exactly one chunk, regardless of whether the word terminates a sentence or straddles the boundary.
+
+**Consequence for carryover:** when chunk 0 ends with an open sentence, its trailing words are kept (they satisfy `start <= valid_end_sec`) and flow into the carryover buffer. Chunk 1's Whisper re-transcribes `[valid_start − 3, valid_start]` as overlap-warm-up; those re-transcribed words have `start <= valid_start` and are excluded from chunk 1. The carried-buffer words then lead chunk 1's segmentation input. No duplicate. No carryover-sentence timestamp drift (the kept words are from chunk 0's Whisper, which saw them clean).
 
 ---
 
@@ -157,30 +183,46 @@ probe [progress=5]
     duration_sec > MAX_VIDEO_MINUTES * 60  →  PipelineError(VIDEO_TOO_LONG)
 upsert_video_clear_segments(video_id, meta)
 download [progress=15]
+chunk_dir = Path("data/audio") / f"chunks_{video_id}"  # video_id regex-validated
 compute_schedule(duration_sec)  →  specs: list[ChunkSpec]
 carryover_buffer: list[Word] = []
 next_segment_idx: int = 0
 for spec in specs:
     for attempt in range(3):
         try:
-            chunk_path = extract_chunk(audio, spec)
-            raw_words  = whisper.transcribe(chunk_path)
+            chunk_path = extract_chunk(source_audio, spec, chunk_dir)
+            raw_words_local = whisper.transcribe(chunk_path)
+            # Offset chunk-local timestamps to video-absolute before clipping.
+            raw_words = [
+                {**w, "start": w["start"] + spec.audio_start_sec,
+                      "end":   w["end"]   + spec.audio_start_sec}
+                for w in raw_words_local
+            ]
             clipped    = clip_to_valid_interval(raw_words, spec)
             break
         except WhisperTransientError as e:
             if attempt == 2:
                 raise PipelineError("WHISPER_ERROR", ...)
-            sleep(backoff(attempt))  # 1s, 2s
-    combined     = carryover_buffer + clipped
-    segments     = segment(combined)
-    held, emit   = split_last_open_sentence(segments)
-    carryover_buffer = words_from_segment(held) if held else []
-    translated   = translator.translate_batch([s["text_en"] for s in emit])
-    for i, seg in enumerate(emit):
-        seg["text_zh"] = translated[i]
-        seg["idx"]     = next_segment_idx + i
-    append_segments(video_id, emit)
-    next_segment_idx += len(emit)
+            # Honor OpenAI's Retry-After on rate-limit errors.
+            retry_after = getattr(e, "retry_after", None)
+            if retry_after is not None:
+                sleep(min(retry_after, 30))
+            else:
+                sleep([1, 2][attempt])
+    combined = carryover_buffer + clipped
+    if combined:                                # silent-chunk guard
+        segments     = segment(combined)
+        held, emit   = split_last_open_sentence(segments)
+        carryover_buffer = words_from_segment(held) if held else []
+    else:                                       # Whisper returned empty, no carryover
+        emit, carryover_buffer = [], []
+    if emit:
+        translated = translator.translate_batch([s["text_en"] for s in emit])
+        for i, seg in enumerate(emit):
+            seg["text_zh"] = translated[i]
+            seg["idx"]     = next_segment_idx + i
+        append_segments(video_id, emit)
+        next_segment_idx += len(emit)
     update_progress(15 + (spec.chunk_idx + 1) * 85 // len(specs))
 
 # Stream end: flush the final carryover (no next chunk to prepend it to)
@@ -191,9 +233,10 @@ if carryover_buffer:
         seg["text_zh"] = translated[i]
         seg["idx"]     = next_segment_idx + i
     append_segments(video_id, final_segs)
+    # Progress stays at 100 on single-chunk runs; flush appends without advancing.
 
 mark_job_completed()
-delete_audio_files_unconditionally()
+cleanup_audio_files_unconditionally(source_audio, chunk_dir)
 ```
 
 ### Why sequential (not parallel)
@@ -205,8 +248,9 @@ Brainstorming settled on Architecture A (sequential + DB-as-bus). This design in
 
 ### Retry policy
 
-- **Per-chunk, bounded to 2 retries** (3 attempts total). Backoff: 1s, 2s.
+- **Per-chunk, bounded to 2 retries** (3 attempts total). Default backoff: 1s, 2s.
 - Retry-eligible: network timeout, HTTP 5xx, OpenAI rate-limit (429). These raise `WhisperTransientError` in the client layer.
+- **`Retry-After` header honored.** When the transient error is `openai.RateLimitError` and the exception carries a `retry_after` attribute (OpenAI sends it on 429), the pipeline sleeps `min(retry_after, 30)` seconds instead of the default backoff for that attempt. This avoids hammering into a still-rate-limited endpoint; the 30s cap bounds one chunk's total retry wait at ≤ 60s.
 - Non-retry-eligible: HTTP 4xx other than 429 (misconfig, bad audio), local ffmpeg failure. These bubble up immediately.
 - **Retry scope is one chunk, not the whole pipeline.** If chunk 2 succeeds but chunk 3 fails all 3 attempts, the job ends at `failed`; chunks 0–2's segments stay in the DB and the frontend reads them as partial. This implements brainstorming Q2=Z.
 
@@ -226,9 +270,9 @@ Invariant: progress is monotone, integer, bounded `[0, 100]`. The `//` (floor di
 
 ### Failure-path invariants
 
-- On `PipelineError`: job → `failed` with error code/message; audio files deleted.
+- On `PipelineError`: job → `failed`; a **sanitized** error message is written to `jobs.error_message` via `_SAFE_MESSAGES` (see Section 5 "Error sanitization"); the raw exception goes to `logger.warning` only; audio files deleted.
 - **Already-appended segments stay in the DB** — this is the core promise of the "retain partial" brainstorming Q2=Z decision.
-- On `update_progress` call after `failed`: the update is a no-op (jobs_repo already guards this via status check in Phase 0; we rely on the existing guard).
+- On `update_progress` call after `failed`: the update MUST be a no-op. **T06 extends `JobsRepo.update_progress` to guard on status**: the SQL becomes `WHERE job_id=? AND progress<=? AND status NOT IN ('failed','completed')`. Phase 0's guard only enforced monotone progress; Phase 1b needs status-aware protection to defend the invariant under future concurrency.
 
 ---
 
@@ -342,6 +386,24 @@ def get_subtitles(video_id: str, conn: DbConn) -> SubtitleResponse:
 
 `GET /api/subtitles/jobs/{job_id}` stays. Useful for debugging, not used by the frontend after Phase 1b. Future cleanup could drop it; Phase 1b does not.
 
+### Error sanitization
+
+`jobs.error_message` is now surfaced in the API (it flows to `SubtitleResponse.error_message` on failed jobs). Before Phase 1b the field only leaked into logs. Phase 1b MUST sanitize before persisting:
+
+```python
+# backend/app/services/pipeline.py (module-level constant)
+_SAFE_MESSAGES: dict[str, str] = {
+    "VIDEO_TOO_LONG":    "影片超過 20 分鐘上限",
+    "FFMPEG_MISSING":    "伺服器缺少 ffmpeg",
+    "DOWNLOAD_ERROR":    "無法下載影片",
+    "WHISPER_ERROR":     "字幕轉錄失敗，請稍後再試",
+    "TRANSLATION_ERROR": "翻譯失敗，請稍後再試",
+    "INTERNAL_ERROR":    "內部錯誤",
+}
+```
+
+At every `update_status(job_id, "failed", error_code=..., error_message=...)` call site, `error_message` MUST be resolved via `_SAFE_MESSAGES[error_code]`. The original exception text goes to `logger.warning(...)` only. This prevents URL fragments, OpenAI request IDs, and truncated API-key fragments from reaching the response body. Test: `test_error_message_never_contains_api_key_or_url` asserts no API response body ever matches regex `/sk-[A-Za-z0-9]/` or `api\.openai\.com`.
+
 ---
 
 ## Section 6 — Repository changes
@@ -386,10 +448,20 @@ def get_video_view(self, video_id: str) -> Optional[dict]:
     """Aggregate read: videos row + all segments + latest job.
 
     Returns None if no job ever existed for video_id. Otherwise returns a
-    dict shaped to SubtitleResponse (except `segments` holds the ORM dicts,
-    which the router converts to `Segment` pydantic).
+    dict whose outer keys align exactly with SubtitleResponse pydantic field
+    names, so the router body reduces to SubtitleResponse(**view). Inner
+    `segments` list holds ORM dicts (keys `start_sec`, `end_sec`,
+    `words_json`, etc.); the router converts them to `Segment` pydantic.
 
-    Single transaction (no external writes possible between the three reads).
+    Atomicity: the method MUST open an explicit
+    `self._conn.execute('BEGIN DEFERRED')` before the three SELECTs and
+    `self._conn.execute('COMMIT')` after. SQLite in WAL mode with
+    `isolation_level=None` (our connection default) does not implicitly
+    snapshot across multiple SELECTs; without the explicit transaction a
+    writer committing between them could expose torn state (e.g.,
+    jobs.status='completed' but segments table missing the last chunk).
+    Test: `test_get_video_view_opens_begin_deferred` spies on `conn.execute`
+    and asserts both BEGIN and COMMIT occur around the SELECTs.
     """
 ```
 
@@ -436,32 +508,44 @@ The file shrinks by roughly 30 lines.
 const { data } = useSubtitleStream(videoId);
 // data: null | { status, progress, segments, title, duration_sec, error_code?, error_message? }
 
-if (data == null) return <LoadingSpinner progress={0} status="載入中..." />;
+// Sticky-completed guard: once we've seen `completed` this page-lifetime, a
+// later poll reverting to `processing`/`failed` (e.g., because the user
+// resubmits the same video in another tab) must NOT unmount the player
+// mid-playback. We freeze into completed view until page reload.
+const sawCompletedRef = useRef(false);
+if (data?.status === 'completed') sawCompletedRef.current = true;
+const effectiveData = sawCompletedRef.current ? lastCompletedData : data;
 
-if (data.status === 'queued' || data.status === 'processing') {
+if (effectiveData == null) return <LoadingSpinner progress={0} status="載入中..." />;
+
+if (effectiveData.status === 'queued' || effectiveData.status === 'processing') {
   return (
     <ProcessingLayout
-      progress={data.progress}
-      segments={data.segments}
-      title={data.title}
+      progress={effectiveData.progress}
+      segments={effectiveData.segments}
+      title={effectiveData.title}
     />
   );
 }
 
-if (data.status === 'failed') {
+if (effectiveData.status === 'failed') {
   return (
     <ProcessingLayout
-      progress={data.progress}
-      segments={data.segments}
-      title={data.title}
-      error={data.error_message ?? '處理失敗'}
+      progress={effectiveData.progress}
+      segments={effectiveData.segments}
+      title={effectiveData.title}
+      error={effectiveData.error_message ?? '處理失敗'}
     />
   );
 }
 
-// data.status === 'completed'
-return <CompletedLayout data={data} />;
+// effectiveData.status === 'completed'
+return <CompletedLayout data={effectiveData} />;
 ```
+
+**Implementation note on the sticky guard:** persist `lastCompletedData` with `useState` initialized to `null`; on every render where `data?.status === 'completed'`, `setState(data)`. Render `lastCompletedData` only after it has been populated at least once — otherwise fall through to normal `data`. The `sawCompletedRef` + `lastCompletedData` pair is ~5 LOC total.
+
+**Loading-spinner cache-hit case:** when HomePage's `createJob` hits a cached video, the response `status` is already `completed`. On mount, `useSubtitleStream` fires the first fetch immediately (same tick), returns `status=completed` on the first poll, and the guard flips. The user sees `<LoadingSpinner>` for the single render between `data==null` and the first response — typically one frame. This is acceptable and documented.
 
 - `ProcessingLayout` = left side `<ProcessingPlaceholder progress={...} error={...} />`, right side `<SubtitlePanel segments={data.segments} readOnly currentIndex={-1} currentWordIndex={-1} onClickSegment={() => {}} />`.
 - `CompletedLayout` = exactly the Phase 1a layout (VideoPlayer + SubtitlePanel + PlayerControls).
@@ -477,30 +561,40 @@ export function useSubtitleStream(videoId: string | null) {
   useEffect(() => {
     if (!videoId) return;
     let cancelled = false;
+    let intervalId: number | null = null;
+
     const tick = async () => {
       try {
-        const resp = await getSubtitles(videoId);  // 200 always, unless 404
+        const resp = await getSubtitles(videoId);  // 200 unless 404
         if (cancelled) return;
         setData(resp);
+        // Terminal-state stop: once the job is done, stop polling to avoid
+        // burning 1 req/s indefinitely on a tab left open overnight. The
+        // response shape is stable after terminal so no UI staleness.
+        if (resp.status === 'completed' || resp.status === 'failed') {
+          if (intervalId !== null) {
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+        }
       } catch (e) {
         if (cancelled) return;
         setError((e as Error).message);
       }
     };
     tick();  // immediate first fetch
-    const id = setInterval(tick, 1000);
-    return () => { cancelled = true; clearInterval(id); };
+    intervalId = window.setInterval(tick, 1000);
+    return () => {
+      cancelled = true;
+      if (intervalId !== null) clearInterval(intervalId);
+    };
   }, [videoId]);
-
-  // Stop condition: once status is terminal, we COULD stop polling. But a
-  // terminal status means subsequent polls return identical bytes at ~no cost
-  // (SQLite cached read), so for implementation simplicity we keep polling
-  // until the component unmounts. An explicit stop on `completed | failed`
-  // is a micro-optimization we skip.
 
   return { data, error };
 }
 ```
+
+**TTFS instrumentation:** the hook does NOT dispatch the `el:first-segment` event; that responsibility belongs to `PlayerPage` (which owns the render). `PlayerPage` has a `useEffect([data?.segments.length])` that, on the first transition from 0 to >0 during processing state, dispatches `window.dispatchEvent(new CustomEvent('el:first-segment', { detail: { t: performance.now() } }))`. The ui-verifier Playwright script listens for this event and records `performance.now() - submit_time` as TTFS.
 
 **Single-fetch-on-mount + 1s interval** is intentional: the component mounts, fires one request immediately (no 1-second blank), then polls. Matches the existing `useJobPolling` cadence and the brainstorming decision §3 Q2.
 
@@ -562,7 +656,7 @@ The `?measure=1` flow is unchanged: if the URL has `?measure=1` and the user loa
 
 ## Section 8 — Non-obvious invariants
 
-Six invariants, each one check-able against a test.
+Nine invariants, each one check-able against a test.
 
 ### 1. Monotone reader prefix
 
@@ -587,6 +681,18 @@ Every `/subtitles` poll's `data.progress` is `>=` the previous poll's progress f
 ### 6. Failed job with zero segments still routes to `/` via click
 
 When `status === 'failed'` and `segments.length === 0`, the UI shows error + "回首頁" button. Clicking navigates to `/`. Tested by: Vitest `userEvent.click` on the button.
+
+### 7. Sticky-completed guard
+
+Once `PlayerPage` has observed `data.status === 'completed'` in a given page lifecycle, subsequent polls returning `processing` or `failed` (possible on resubmit in another tab) MUST NOT cause the UI to re-render the processing / failed layout. The player stays mounted; playback position is preserved. Tested by: scripted hook mock cycling `completed → processing → failed`; assert the rendered tree stays `<CompletedLayout>` with a preserved React instance.
+
+### 8. `update_progress` is status-guarded
+
+`JobsRepo.update_progress(job_id, value)` MUST be a no-op when the job's current `status` is `failed` or `completed`. This is enforced at the SQL level: `WHERE job_id=? AND progress<=? AND status NOT IN ('failed','completed')`. Tested by: pytest marking a job failed, then calling `update_progress` with a higher value, asserting the row's progress column did not move.
+
+### 9. TTFS event fires exactly once per page lifecycle
+
+`PlayerPage` dispatches `window.dispatchEvent(new CustomEvent('el:first-segment', { detail: { t: performance.now() } }))` exactly once per mount — on the render where `data.segments.length` first transitions from 0 to > 0. Subsequent segment appends during the same `processing` session do NOT re-fire. A new page load starts the lifecycle over. Tested by: Vitest render with a scripted hook sequence `segments=[] → segments=[s0] → segments=[s0,s1]`; spy on `window.dispatchEvent` asserts exactly one call with type `el:first-segment`.
 
 ---
 

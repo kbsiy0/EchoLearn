@@ -149,7 +149,14 @@ THEN it returns `None`.
 
 GIVEN a row exists in `jobs`, `videos`, and `segments` for V
 WHEN `get_video_view(V)` is called
-THEN all three reads execute within a single transaction so the result cannot reflect a mix of pre- and post-write states.
+THEN the method MUST execute `BEGIN DEFERRED` before the SELECTs and `COMMIT` after, so the three reads are observed under a single snapshot
+AND on any exception during the reads, the method executes `ROLLBACK` before re-raising.
+
+### Repository: get_video_view transaction shape is observable
+
+GIVEN a test that spies on `conn.execute`
+WHEN `get_video_view(V)` runs
+THEN the observed call sequence contains `BEGIN DEFERRED` → three SELECTs → `COMMIT` in order; no intermediate COMMIT appears.
 
 ### Repository: get_video_view returns latest job
 
@@ -172,6 +179,8 @@ THEN `segments` is ordered by `idx`, `idx` values are contiguous starting from 0
 5. **Atomic per-chunk writes.** `append_segments` is one transaction per chunk; no cross-chunk atomicity is promised.
 6. **FK integrity preserved.** `segments.video_id` still has `REFERENCES videos(video_id) ON DELETE CASCADE`.
 7. **No endpoint removal.** `GET /api/subtitles/jobs/{job_id}` remains available for debugging; the frontend does not consume it after Phase 1b.
+8. **`get_video_view` uses an explicit transaction.** `BEGIN DEFERRED` / `COMMIT` wrap the three SELECTs so that WAL-mode concurrency cannot tear the view across `jobs`, `videos`, `segments`.
+9. **`error_message` is sanitized before reaching the API.** Responses with `status="failed"` carry a value from `_SAFE_MESSAGES[error_code]` only; raw exception text never reaches the response body.
 
 ## Non-goals (Phase 1b)
 

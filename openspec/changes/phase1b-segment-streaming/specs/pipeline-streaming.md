@@ -94,12 +94,43 @@ GIVEN any non-negative `duration_sec`
 WHEN `compute_schedule(duration_sec)` is called twice
 THEN both calls return equal `ChunkSpec` lists (pure function; no hidden state).
 
-### Overlap clipping keeps a word that ends after valid_start
+### Overlap clipping: asymmetric partition rule
 
-GIVEN a `ChunkSpec` with `valid_start_sec=60, valid_end_sec=360`
-AND a Whisper word with `start=59.5, end=60.4`
-WHEN `clip_to_valid_interval([...word...], spec)` is called
-THEN the word is retained in the result (its `end >= valid_start_sec`).
+GIVEN a `ChunkSpec` with `valid_start_sec=60, valid_end_sec=360, is_first=False`
+WHEN `clip_to_valid_interval` runs over a word stream
+THEN a word is retained iff `w["start"] > valid_start_sec AND w["start"] <= valid_end_sec`.
+
+GIVEN a `ChunkSpec` with `is_first=True`
+WHEN clipping runs
+THEN the `valid_start_sec` lower bound is relaxed: all words with `w["start"] <= valid_end_sec` are kept (including `start == 0`).
+
+### Overlap clipping: word at the boundary belongs to the previous chunk
+
+GIVEN a word `{start: 60.0, end: 60.4}`
+AND a non-first `ChunkSpec` with `valid_start_sec=60, valid_end_sec=360`
+WHEN `clip_to_valid_interval` runs
+THEN the word is excluded (equality `start == valid_start_sec` is strict-`>`, so the word belongs to the previous chunk).
+
+### Overlap clipping: word just after the boundary belongs to this chunk
+
+GIVEN a word `{start: 60.01, end: 60.5}`
+AND a non-first `ChunkSpec` with `valid_start_sec=60, valid_end_sec=360`
+WHEN `clip_to_valid_interval` runs
+THEN the word is retained.
+
+### Overlap clipping: straddle at tail is retained
+
+GIVEN a word `{start: 359.5, end: 360.6}` that spans the end-of-chunk boundary
+AND a `ChunkSpec` with `valid_end_sec=360`
+WHEN `clip_to_valid_interval` runs
+THEN the word is retained (straddling at the tail is OK — the next chunk's strict-greater start rule prevents duplication).
+
+### Overlap clipping: partition across consecutive chunks
+
+GIVEN two adjacent `ChunkSpec`s with matched boundaries (`chunk0.valid_end == chunk1.valid_start`)
+AND an input word stream covering both chunks' ranges
+WHEN `clip_to_valid_interval` is applied to each chunk independently
+THEN the union of the two clipped outputs equals the original input set (no drops, no duplicates) — `clip` is a partition over the input.
 
 ### Overlap clipping drops a word outside both bounds
 
@@ -107,6 +138,13 @@ GIVEN a `ChunkSpec` with `valid_start_sec=60, valid_end_sec=360`
 AND a Whisper word with `start=361.0, end=361.5`
 WHEN `clip_to_valid_interval` runs
 THEN the word is excluded (its `start > valid_end_sec`).
+
+### Timestamp offset: chunk-local to video-absolute
+
+GIVEN a `ChunkSpec` with `audio_start_sec=57` extracted via `ffmpeg -ss 57 -to 363 ... -avoid_negative_ts make_zero`
+AND Whisper returns a word at chunk-local `{start: 3.5, end: 3.9}`
+WHEN the pipeline applies the offset
+THEN the word's video-absolute timestamps are `{start: 60.5, end: 60.9}` before `clip_to_valid_interval` runs.
 
 ### Sentence carryover: clean terminator
 
@@ -149,10 +187,52 @@ THEN `translate_batch` is called only with the terminated (emitted) segments' `t
 ### Pipeline: per-chunk retry on transient Whisper failure
 
 GIVEN a pipeline run processing chunk M
-AND the first `WhisperClient.transcribe` call raises `WhisperTransientError`
+AND the first `WhisperClient.transcribe` call raises `WhisperTransientError` without a `retry_after` attribute
 WHEN the pipeline retries
 THEN the pipeline sleeps 1s, retries; on a second transient failure it sleeps 2s, retries a third time; if the third attempt succeeds, processing of chunk M proceeds normally using that third result
 AND no segments from chunk M are persisted until the successful attempt.
+
+### Pipeline: Retry-After header is honored on 429
+
+GIVEN a pipeline run processing chunk M
+AND `WhisperClient.transcribe` raises `WhisperTransientError` with `retry_after=5`
+WHEN the pipeline retries
+THEN the pipeline sleeps exactly `min(5, 30) == 5` seconds (not the default 1s backoff) before the next attempt.
+
+### Pipeline: Retry-After cap
+
+GIVEN a `WhisperTransientError` with `retry_after=120`
+WHEN the pipeline prepares to retry
+THEN the pipeline sleeps `min(120, 30) == 30` seconds (capped).
+
+### Pipeline: silent chunk does not crash segmenter
+
+GIVEN a pipeline run where chunk M's Whisper result is empty (`raw_words == []`) AND the carryover buffer is also empty at the start of chunk M
+WHEN the pipeline processes chunk M
+THEN the pipeline MUST NOT call `segment([])` (which would raise `ValueError`)
+AND no segments are appended for chunk M
+AND progress is still advanced normally for chunk M
+AND chunk M+1 proceeds as usual.
+
+### Pipeline: silent chunk preserves carryover
+
+GIVEN a pipeline run where chunk M's Whisper result is empty (`raw_words == []`) AND the carryover buffer at the start of chunk M is non-empty (from an open sentence at the end of chunk M−1)
+WHEN the pipeline processes chunk M
+THEN the carryover buffer is carried through to chunk M+1 intact (not discarded, not double-segmented).
+
+### Pipeline: chunk directory is under data/audio with validated video_id
+
+GIVEN any pipeline run for `video_id=V` (V regex-validated)
+WHEN the pipeline extracts chunks
+THEN the chunk files are written to `Path("data/audio") / f"chunks_{V}"`
+AND that directory is deleted (recursively) on both terminal states (completed or failed), alongside the source audio file.
+
+### Pipeline: error_message in API response is sanitized
+
+GIVEN a pipeline run where `WhisperClient.transcribe` raises an exception whose `str()` contains a raw OpenAI URL or API-key fragment (e.g., `"Incorrect API key provided: sk-abcd1234..."`)
+WHEN the pipeline handles the failure
+THEN `jobs.error_message` is set to the canonical user-facing string from `_SAFE_MESSAGES[error_code]` (e.g., `"字幕轉錄失敗，請稍後再試"` for `WHISPER_ERROR`)
+AND the raw exception text appears only in `logger.warning` records, never in the DB row or API response.
 
 ### Pipeline: three consecutive transient failures on a single chunk
 
@@ -190,9 +270,10 @@ THEN `jobs.progress` updates are monotone non-decreasing, bounded `[0, 100]`, st
 
 ### Pipeline: progress update after failure is a no-op
 
-GIVEN a job whose status has already transitioned to `failed`
-WHEN the pipeline (or any of its helpers) attempts `update_progress`
-THEN the jobs_repo guards the call and the row's `progress` does not regress or advance.
+GIVEN a job whose status has already transitioned to `failed` (or `completed`)
+WHEN the pipeline (or any late-arriving helper) attempts `update_progress(job_id, value)`
+THEN `JobsRepo.update_progress` MUST be a no-op: the SQL guard `WHERE job_id=? AND progress<=? AND status NOT IN ('failed','completed')` excludes the row
+AND the row's `progress` column does not change.
 
 ### Pipeline: MAX_VIDEO_MINUTES enforced at 20
 
@@ -210,13 +291,17 @@ THEN the schedule has one chunk, the loop iterates exactly once, no carryover ca
 
 1. **Sequential, not parallel.** Chunks run one at a time; `append_segments` is never called concurrently for the same `video_id`.
 2. **Monotone reader prefix.** The segments returned by any `/subtitles/{video_id}` read at time t are a prefix (ordered by `idx`) of the segments returned at any later time t' for the same video.
-3. **No duplicate words across boundaries.** A Whisper-detected word whose time span crosses a chunk boundary appears in the final DB exactly once.
-4. **Original timestamps for carried sentences.** Words carried via `sentence_carryover` retain their original Whisper timestamps.
+3. **No duplicate words across boundaries.** `clip_to_valid_interval` partitions words across chunks by the asymmetric rule (`start > valid_start` AND `start <= valid_end`; first-chunk exception for `start == 0`). Each word belongs to exactly one chunk.
+4. **Original timestamps for carried sentences.** Words carried via `sentence_carryover` retain their chunk-of-origin Whisper timestamps (already offset to video-absolute).
 5. **Per-chunk retry bounded.** A single chunk attempts at most 3 Whisper calls; retries are per-chunk, not per-job.
-6. **Partial retention on failure.** A `failed` pipeline run leaves previously-appended segments in the DB.
-7. **Atomic per-chunk persistence.** Each `append_segments` call is one SQLite transaction; a chunk either fully lands or fully rolls back.
-8. **Audio cleanup is unconditional.** Per-chunk extracted files and the source download are deleted on every terminal state (completed or failed).
-9. **Whisper is still the only time base.** Phase 1b does not introduce a second timing source; Phase 0's Section 3 invariant carries through.
+6. **`Retry-After` header honored.** On `openai.RateLimitError`, the wrapper's `retry_after` attribute determines sleep duration (capped at 30s), not the default 1s/2s backoff.
+7. **Partial retention on failure.** A `failed` pipeline run leaves previously-appended segments in the DB.
+8. **Atomic per-chunk persistence.** Each `append_segments` call is one SQLite transaction; a chunk either fully lands or fully rolls back.
+9. **Audio cleanup is unconditional.** Per-chunk extracted files AND the source download are deleted on every terminal state (completed or failed). The chunk directory at `data/audio/chunks_{video_id}` is removed recursively.
+10. **Whisper is still the only time base.** Phase 1b does not introduce a second timing source; Phase 0's Section 3 invariant carries through. Chunk-local timestamps are offset by `spec.audio_start_sec` before entering the segmentation pipeline.
+11. **`update_progress` is status-guarded.** The SQL guard prevents progress movement on `failed` or `completed` jobs; this defends the "no zombie progress" invariant under future concurrency.
+12. **Silent chunks do not crash.** An empty Whisper result combined with an empty carryover buffer skips the `segment()` call; no `ValueError` escapes.
+13. **Error messages are sanitized at the persistence boundary.** `jobs.error_message` never contains raw exception text; only `_SAFE_MESSAGES` canonical strings reach the DB and the API response.
 
 ## Non-goals (Phase 1b)
 

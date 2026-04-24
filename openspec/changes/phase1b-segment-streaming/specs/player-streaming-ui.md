@@ -102,6 +102,19 @@ THEN the hook updates `error` to the error message
 AND the next 1-second tick still fires a fetch
 AND a successful subsequent poll clears `error` (or replaces `data` regardless of the prior error).
 
+### useSubtitleStream: stops polling after terminal status
+
+GIVEN an active `useSubtitleStream` hook
+WHEN a poll returns `status="completed"` or `status="failed"`
+THEN the hook clears its `setInterval` and does not fire additional fetches for the lifetime of this hook instance
+AND subsequent user interactions that do not change `videoId` do NOT restart polling.
+
+### useSubtitleStream: terminal-stop preserves final data
+
+GIVEN the hook has reached a terminal status and stopped polling
+WHEN the component re-renders for any reason
+THEN `data` retains the last response (terminal-stop does not clear state).
+
 ### PlayerPage: pre-first-response shows loading spinner
 
 GIVEN `PlayerPage` has just mounted and `useSubtitleStream.data` is still `null`
@@ -174,6 +187,32 @@ WHEN the Phase 1a hooks (`useSubtitleSync`, `useAutoPause`, `useLoopSegment`, `u
 THEN they each see a non-growing, final `segments` array on their first run
 AND no Phase 1a invariant is asserted against an in-flight (growing) segments array.
 
+### PlayerPage: sticky-completed guard blocks downgrade to processing
+
+GIVEN `PlayerPage` has observed `data.status === 'completed'` at least once during its lifecycle
+WHEN a later poll returns `status="processing"` or `status="failed"` (possible when the same `video_id` is resubmitted from another tab)
+THEN `PlayerPage` continues rendering `<CompletedLayout>` using the last-seen completed data
+AND `<VideoPlayer>` stays mounted with the same React instance (playback position, pause state, loop state preserved).
+
+### PlayerPage: sticky-completed resets on page reload
+
+GIVEN the sticky-completed guard is active in one tab
+WHEN the user reloads the page (or navigates away and back)
+THEN the lifecycle resets: the guard's ref is back to `false`, and the page re-enters the normal `processing → completed` flow based on the first poll response.
+
+### PlayerPage: TTFS event fires exactly once on first segment appearance
+
+GIVEN `PlayerPage` is in `status="processing"` with `data.segments.length === 0`
+WHEN a poll returns a response where `segments.length` transitions from 0 to any positive number
+THEN `PlayerPage` dispatches `window.dispatchEvent(new CustomEvent('el:first-segment', { detail: { t: performance.now() } }))` exactly once for this page lifecycle
+AND subsequent segment appends during the same processing session do NOT re-fire the event.
+
+### PlayerPage: TTFS event does not fire on cache-hit completed mount
+
+GIVEN `PlayerPage` mounts and the first poll returns `status="completed"` directly (cache-hit path from `createJob`)
+WHEN the render completes
+THEN no `el:first-segment` event is dispatched (TTFS is undefined for a cached video — we only instrument the streaming path).
+
 ### PlayerPage: `?measure=1` semantics unchanged
 
 GIVEN the URL contains `?measure=1`
@@ -201,6 +240,13 @@ GIVEN `ProcessingPlaceholder` is rendered with `title="How to build a spec"` and
 WHEN it renders
 THEN the title is rendered (truncated if long)
 AND the progress bar and label are also rendered.
+
+## Additional invariants
+
+- **Sticky-completed across polls.** Once `status=completed` is observed, the render stays on the completed layout for the rest of the page lifecycle regardless of later poll responses.
+- **Terminal polling stops.** `useSubtitleStream` clears its interval on first terminal response to prevent unbounded polling on long-lived tabs.
+- **TTFS event fires at most once per mount.** `window.dispatchEvent('el:first-segment', ...)` is guarded by a ref that only flips on the 0→>0 segment transition.
+- **Cache-hit does not fire TTFS.** The event is bound to the processing-state-first-segment transition; cache-hit pages go directly to completed and emit nothing.
 
 ## Invariants
 
