@@ -8,8 +8,9 @@ The client is injectable: tests pass FakeWhisperClient; production uses this.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
+from app.config import settings
 
 # Word type alias (informational — runtime representation is plain dict)
 Word = dict  # {"text": str, "start": float, "end": float}
@@ -19,12 +20,13 @@ class WhisperClient:
     """OpenAI whisper-1 client.
 
     Args:
-        api_key: OpenAI API key. Defaults to OPENAI_API_KEY env var.
-                 Empty string is allowed for tests (no real calls made).
+        api_key: OpenAI API key. Defaults to settings.OPENAI_API_KEY (loaded
+                 from .env by pydantic-settings). Empty string is allowed for
+                 tests (no real calls made).
     """
 
     def __init__(self, api_key: str | None = None) -> None:
-        self._api_key = api_key if api_key is not None else os.getenv("OPENAI_API_KEY", "")
+        self._api_key = api_key if api_key is not None else settings.OPENAI_API_KEY
 
     def transcribe(self, audio_path: Path) -> list[Word]:
         """Transcribe audio file via whisper-1, returning word-level timings.
