@@ -5,19 +5,20 @@ The client is injectable: tests pass FakeTranslator; production uses this.
 
 from __future__ import annotations
 
-import os
+from app.config import settings
 
 
 class Translator:
     """GPT-4o-mini batch translator (EN → ZH).
 
     Args:
-        api_key: OpenAI API key. Defaults to OPENAI_API_KEY env var.
-                 Empty string is allowed for tests (no real calls made).
+        api_key: OpenAI API key. Defaults to settings.OPENAI_API_KEY (loaded
+                 from .env by pydantic-settings). Empty string is allowed for
+                 tests (no real calls made).
     """
 
     def __init__(self, api_key: str | None = None) -> None:
-        self._api_key = api_key if api_key is not None else os.getenv("OPENAI_API_KEY", "")
+        self._api_key = api_key if api_key is not None else settings.OPENAI_API_KEY
 
     def translate_batch(self, texts_en: list[str]) -> list[str]:
         """Translate a batch of English strings to Chinese.
