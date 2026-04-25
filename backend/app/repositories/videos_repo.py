@@ -73,7 +73,7 @@ class VideosRepo:
                 "DELETE FROM segments WHERE video_id=?", (video_id,)
             )
 
-    def append_segments(self, video_id: str, segments: list) -> None:
+    def append_segments(self, video_id: str, segments: list[dict]) -> None:
         """Called once per successful chunk to append rows atomically.
 
         Caller is responsible for assigning monotone idx values that do not
