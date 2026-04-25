@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.services.transcription.youtube_audio import download_audio, PipelineError
+from app.services.transcription.youtube_audio import download_audio, probe_metadata, PipelineError
 
 
 # ---------------------------------------------------------------------------
@@ -100,3 +101,47 @@ class TestDownloadAudioExtractorArgs:
                 download_audio("dQw4w9WgXcQ")
 
         assert exc_info.value.error_code == "FFMPEG_MISSING"
+
+
+# ---------------------------------------------------------------------------
+# Helpers for probe_metadata tests
+# ---------------------------------------------------------------------------
+
+def _make_probe_result(duration_sec: float, returncode: int = 0) -> MagicMock:
+    """Return a mock subprocess.CompletedProcess with yt-dlp --dump-json output."""
+    result = MagicMock()
+    result.returncode = returncode
+    result.stderr = ""
+    result.stdout = json.dumps({
+        "id": "dQw4w9WgXcQ",
+        "title": "Test Video",
+        "duration": duration_sec,
+    })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Tests: probe_metadata MAX_VIDEO_MINUTES guard
+# ---------------------------------------------------------------------------
+
+class TestProbeMetadataMaxDuration:
+    """Verify probe_metadata enforces MAX_VIDEO_MINUTES boundary."""
+
+    def test_probe_raises_video_too_long_at_21_minutes(self):
+        """A video of 21 min 1 sec must raise PipelineError(VIDEO_TOO_LONG)."""
+        duration = 21 * 60 + 1  # 1261 seconds
+        with patch("app.services.transcription.youtube_audio.subprocess.run") as mock_run:
+            mock_run.return_value = _make_probe_result(duration)
+            with pytest.raises(PipelineError) as exc_info:
+                probe_metadata("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+        assert exc_info.value.error_code == "VIDEO_TOO_LONG"
+
+    def test_probe_succeeds_at_20_minutes_exactly(self):
+        """A video of exactly 20 min must NOT raise (boundary is inclusive)."""
+        duration = 20 * 60  # 1200 seconds
+        with patch("app.services.transcription.youtube_audio.subprocess.run") as mock_run:
+            mock_run.return_value = _make_probe_result(duration)
+            metadata = probe_metadata("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+        assert metadata.duration_sec == duration
