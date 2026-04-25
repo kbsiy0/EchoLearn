@@ -532,9 +532,11 @@ class TestSentenceCarryover:
                         f"Expected original chunk-0 timestamp ~58 but got {w['start']}"
                     )
                     found_open_word = True
-        # It's fine if open word wasn't carried (might have been segmented differently)
-        # The key assertion is that if it is present, it has the right timestamp
-        # The test verifies the pipeline completes without error
+        # The carryover MUST preserve the open sentence; if it didn't, the test
+        # is vacuously passing on the status check alone (spec-reviewer T06 nit Q1).
+        assert found_open_word, (
+            "carryover did not preserve the open sentence — invariant 4 violated"
+        )
         job = JobsRepo(db_conn).get(job_id)
         assert job["status"] == "completed"
 
@@ -673,17 +675,12 @@ class TestChunkDirCleanup:
             f"Expected chunk_dir={expected_chunk_dir}, got {chunk_dir_calls}"
         )
 
-    def test_audio_files_deleted_on_completed_and_on_failed(
+    def test_audio_files_deleted_on_completed(
         self, db_conn, tmp_path, monkeypatch
     ):
-        """Source audio and chunk_dir are cleaned up on both terminal states."""
+        """Source audio is unlinked on the completed terminal state."""
         monkeypatch.setattr("subprocess.run", MagicMock())
         monkeypatch.setattr("time.sleep", lambda _: None)
-
-        # Create a real temp chunk_dir to verify deletion
-        chunk_dir = tmp_path / "chunks"
-        chunk_dir.mkdir()
-        (chunk_dir / "chunk_00.mp3").write_bytes(b"")
 
         deleted_paths: list[Path] = []
         real_unlink = Path.unlink
@@ -703,9 +700,46 @@ class TestChunkDirCleanup:
 
         job = JobsRepo(db_conn).get(job_id)
         assert job["status"] == "completed"
-        # The source audio path should have been unlinked
         assert any(str(VIDEO_ID) in str(p) for p in deleted_paths), (
             f"Source audio not deleted; unlinked: {deleted_paths}"
+        )
+
+    def test_audio_files_deleted_on_failed(
+        self, db_conn, tmp_path, monkeypatch
+    ):
+        """Source audio is unlinked on the failed terminal state too.
+
+        T06 spec-reviewer Q2: the original combined test only exercised the
+        completed path. Failed path needs its own assertion.
+        """
+        monkeypatch.setattr("subprocess.run", MagicMock())
+        monkeypatch.setattr("time.sleep", lambda _: None)
+
+        deleted_paths: list[Path] = []
+        real_unlink = Path.unlink
+
+        def spy_unlink(self_path, *args, **kwargs):
+            deleted_paths.append(self_path)
+            if self_path.exists():
+                real_unlink(self_path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", spy_unlink)
+
+        # Force a non-retry-eligible failure on the first chunk (raises a plain
+        # Exception, not WhisperTransientError, so no retries).
+        class FailingWhisper:
+            def transcribe(self, _path):
+                raise RuntimeError("simulated non-transient failure")
+
+        job_id = _create_job(db_conn)
+        _make_pipeline(
+            db_conn, FailingWhisper(), duration_sec=45.0, tmp_path=tmp_path,
+        ).run(job_id)
+
+        job = JobsRepo(db_conn).get(job_id)
+        assert job["status"] == "failed"
+        assert any(str(VIDEO_ID) in str(p) for p in deleted_paths), (
+            f"Source audio not deleted on failed path; unlinked: {deleted_paths}"
         )
 
 

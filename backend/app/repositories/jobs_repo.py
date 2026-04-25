@@ -119,7 +119,8 @@ class JobsRepo:
 
         if cursor.rowcount == 0:
             logger.warning(
-                "update_progress conditional no-op: %s tried %d but DB has higher",
+                "update_progress no-op: %s tried %d (rejected by status guard "
+                "OR DB already has higher progress)",
                 job_id, progress,
             )
 

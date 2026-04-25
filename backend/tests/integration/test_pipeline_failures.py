@@ -150,12 +150,15 @@ def test_malformed_video_id_rejected(db_conn, tmp_path):
 # Whisper empty output → job still completes (silent chunk handling)
 # ---------------------------------------------------------------------------
 
-def test_empty_whisper_output_records_whisper_error(db_conn, tmp_path, monkeypatch):
-    """Empty whisper output on a 45s single-chunk video: no crash.
+def test_empty_whisper_output_completes_silently(db_conn, tmp_path, monkeypatch):
+    """Empty whisper output on a 45s single-chunk video: no crash, no error.
 
-    Note: Phase 1b silent-chunk guard means [] from whisper + [] carryover
-    → no segments emitted, but pipeline still completes. The video has no
-    speech, so the job completes with 0 segments rather than erroring.
+    Phase 1b silent-chunk guard: [] from whisper + [] carryover → no
+    segments emitted, but pipeline still completes successfully. The
+    video has no speech, so the job completes with 0 segments rather
+    than the Phase 0 WHISPER_ERROR. (Renamed from
+    `test_empty_whisper_output_records_whisper_error` per T06 spec
+    review — the old name lied about behavior.)
     """
     monkeypatch.setattr("subprocess.run", MagicMock())
     audio = _make_audio(tmp_path)
