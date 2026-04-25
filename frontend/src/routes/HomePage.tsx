@@ -19,19 +19,20 @@ export function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [videos, setVideos] = useState<VideoSummary[]>([]);
 
-  // Fetch video history
-  const fetchVideos = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/videos`);
-      if (res.ok) setVideos(await res.json());
-    } catch {
-      // silently ignore history fetch errors
-    }
-  }, []);
-
   useEffect(() => {
-    fetchVideos();
-  }, [fetchVideos]);
+    let cancelled = false;
+    fetch(`${API_BASE}/videos`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data) setVideos(data);
+      })
+      .catch(() => {
+        // silently ignore history fetch errors
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSubmit = useCallback(async (url: string) => {
     setError(null);
