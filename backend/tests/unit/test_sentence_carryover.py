@@ -57,6 +57,18 @@ def test_closing_quote_after_period_treated_as_terminated():
     assert emitted == [seg]
 
 
+@pytest.mark.parametrize("text_en", [
+    'She said “hi.”',   # U+201D right double quotation mark
+    "She said ‘hi.’",   # U+2019 right single quotation mark
+    "She said 'hi.'",              # ASCII single quote
+])
+def test_unicode_closing_quotes_after_terminator_treated_as_terminated(text_en):
+    seg = _seg(text_en)
+    held, emitted = split_last_open_sentence([seg])
+    assert held is None
+    assert emitted == [seg]
+
+
 def test_empty_list_returns_none_empty():
     assert split_last_open_sentence([]) == (None, [])
 

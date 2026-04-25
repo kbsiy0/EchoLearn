@@ -10,7 +10,7 @@ from typing import Any, Optional
 Word = dict[str, Any]   # {"text": str, "start": float, "end": float}
 
 # Mirror of segmenter.py's punctuation rule — keep in sync if that ever moves.
-_CLOSING_QUOTES = '"”’\''
+_CLOSING_QUOTES = '"\u201d\u2019\''
 _PUNCT_ENDINGS = ('.', '!', '?')
 
 
