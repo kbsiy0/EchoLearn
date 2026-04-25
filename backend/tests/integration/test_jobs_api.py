@@ -132,12 +132,11 @@ def test_cache_hit_returns_completed_job_without_running_pipeline(
 ):
     """If a videos row exists, return synthetic completed job without submitting."""
     videos_repo = VideosRepo(db_conn)
-    videos_repo.publish_video(
+    videos_repo.upsert_video_clear_segments(
         video_id=VIDEO_ID,
         title="Rick Astley",
         duration_sec=213.0,
         source="whisper",
-        segments=[],
     )
 
     resp = client.post("/api/subtitles/jobs", json={"url": VALID_URL})
@@ -203,12 +202,11 @@ def test_get_subtitles_returns_data(
     subtitles_client: TestClient, db_conn: sqlite3.Connection
 ):
     videos_repo = VideosRepo(db_conn)
-    videos_repo.publish_video(
+    videos_repo.upsert_video_clear_segments(
         video_id=VIDEO_ID,
         title="Rick Astley",
         duration_sec=213.0,
         source="whisper",
-        segments=[],
     )
 
     resp = subtitles_client.get(f"/api/subtitles/{VIDEO_ID}")
@@ -306,12 +304,11 @@ def test_cache_hit_returns_pollable_job(
 ):
     """POST cache-hit → job_id → GET /jobs/{job_id} must return 200 status=completed."""
     videos_repo = VideosRepo(db_conn)
-    videos_repo.publish_video(
+    videos_repo.upsert_video_clear_segments(
         video_id=VIDEO_ID,
         title="Rick Astley",
         duration_sec=213.0,
         source="whisper",
-        segments=[],
     )
 
     # Trigger cache-hit path

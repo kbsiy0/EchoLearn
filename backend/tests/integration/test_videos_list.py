@@ -37,12 +37,11 @@ def test_list_videos_empty_db(client: TestClient):
 
 def test_list_videos_returns_rows_after_publish(db_conn: sqlite3.Connection, client: TestClient):
     repo = VideosRepo(db_conn)
-    repo.publish_video(
+    repo.upsert_video_clear_segments(
         video_id="dQw4w9WgXcW",
         title="Rick Astley",
         duration_sec=213.0,
         source="whisper",
-        segments=[],
     )
     resp = client.get("/api/videos")
     assert resp.status_code == 200
