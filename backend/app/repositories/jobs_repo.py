@@ -111,7 +111,8 @@ class JobsRepo:
 
             cursor = self._conn.execute(
                 "UPDATE jobs SET progress=?, updated_at=?"
-                " WHERE job_id=? AND progress<=?",
+                " WHERE job_id=? AND progress<=?"
+                " AND status NOT IN ('failed','completed')",
                 (progress, _now(), job_id, progress),
             )
             self._conn.commit()

@@ -1,4 +1,7 @@
-"""Integration tests — pipeline failure paths and edge cases."""
+"""Integration tests — pipeline failure paths and edge cases.
+
+Migrated for T06: uses subprocess.run mock (no real ffmpeg) and new repo API.
+"""
 
 import uuid
 from pathlib import Path
@@ -35,7 +38,7 @@ def _create_job(db_conn, video_id: str = VIDEO_ID) -> str:
 
 def _good_probe(url: str) -> VideoMetadata:
     return VideoMetadata(
-        video_id=VIDEO_ID, title="Test", duration_sec=60.0, source="whisper"
+        video_id=VIDEO_ID, title="Test", duration_sec=45.0, source="whisper"
     )
 
 
@@ -43,12 +46,14 @@ def _good_probe(url: str) -> VideoMetadata:
 # Audio deleted on failure
 # ---------------------------------------------------------------------------
 
-def test_audio_deleted_on_whisper_failure(db_conn, tmp_path):
+def test_audio_deleted_on_whisper_failure(db_conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("subprocess.run", MagicMock())
     audio = _make_audio(tmp_path)
 
     def fake_download(video_id: str) -> Path:
         return audio
 
+    # RuntimeError from whisper (non-transient) → WHISPER_ERROR
     whisper = FakeWhisperClient(words=RuntimeError("API error"))
     translator = FakeTranslator(mapping={})
 
@@ -67,7 +72,8 @@ def test_audio_deleted_on_whisper_failure(db_conn, tmp_path):
     assert job["error_code"] == "WHISPER_ERROR"
 
 
-def test_audio_deleted_on_translation_failure(db_conn, tmp_path):
+def test_audio_deleted_on_translation_failure(db_conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("subprocess.run", MagicMock())
     audio = _make_audio(tmp_path)
 
     def fake_download(video_id: str) -> Path:
@@ -141,18 +147,23 @@ def test_malformed_video_id_rejected(db_conn, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Whisper empty output → WHISPER_ERROR
+# Whisper empty output → job still completes (silent chunk handling)
 # ---------------------------------------------------------------------------
 
-def test_empty_whisper_output_records_whisper_error(db_conn, tmp_path):
+def test_empty_whisper_output_records_whisper_error(db_conn, tmp_path, monkeypatch):
+    """Empty whisper output on a 45s single-chunk video: no crash.
+
+    Note: Phase 1b silent-chunk guard means [] from whisper + [] carryover
+    → no segments emitted, but pipeline still completes. The video has no
+    speech, so the job completes with 0 segments rather than erroring.
+    """
+    monkeypatch.setattr("subprocess.run", MagicMock())
     audio = _make_audio(tmp_path)
 
     def fake_download(video_id: str) -> Path:
         return audio
 
-    whisper = FakeWhisperClient(words=[])  # empty → segmenter raises ValueError
-
-    # FakeWhisperClient returns [] (list), segmenter raises ValueError
+    whisper = FakeWhisperClient(words=[])
     translator = FakeTranslator(mapping={})
 
     job_id = _create_job(db_conn)
@@ -165,13 +176,13 @@ def test_empty_whisper_output_records_whisper_error(db_conn, tmp_path):
     ).run(job_id)
 
     job = JobsRepo(db_conn).get(job_id)
-    assert job["status"] == "failed"
-    assert job["error_code"] == "WHISPER_ERROR"
+    # Phase 1b: silent chunk does not crash; job completes with 0 segments
+    assert job["status"] == "completed"
     assert not audio.exists()
 
 
 # ---------------------------------------------------------------------------
-# No videos row if pipeline fails before publish
+# No videos row if pipeline fails before upsert
 # ---------------------------------------------------------------------------
 
 def test_no_videos_row_on_early_failure(db_conn, tmp_path):
@@ -191,4 +202,4 @@ def test_no_videos_row_on_early_failure(db_conn, tmp_path):
     ).run(job_id)
 
     video = VideosRepo(db_conn).get_video(VIDEO_ID)
-    assert video is None, "no videos row should exist if pipeline failed before publish"
+    assert video is None, "no videos row should exist if pipeline failed before upsert"
