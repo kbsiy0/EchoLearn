@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import type { SubtitleResponse, SubtitleSegment } from '../types/subtitle';
 import { useSubtitleStream } from '../features/player/hooks/useSubtitleStream';
 import type { Segment } from '../features/player/hooks/useSubtitleSync';
@@ -22,10 +22,11 @@ function toSegments(apiSegments: SubtitleSegment[]): Segment[] {
 // --- ProcessingLayout -------------------------------------------------------
 
 function ProcessingLayout({ data }: { data: SubtitleResponse }) {
-  const navigate = useNavigate();
   const hasSegments = data.segments.length > 0;
   const segments = toSegments(data.segments);
   const noop = useCallback(() => {}, []);
+  const errorForPlaceholder =
+    data.status === 'failed' ? (data.error_message ?? '處理失敗') : undefined;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -38,7 +39,7 @@ function ProcessingLayout({ data }: { data: SubtitleResponse }) {
         <ProcessingPlaceholder
           progress={data.progress}
           title={data.title}
-          error={data.error_message ?? undefined}
+          error={errorForPlaceholder}
         />
         {hasSegments && (
           <div className="w-full bg-gray-800 rounded-lg p-4 overflow-hidden flex flex-col max-h-64 shrink-0">
@@ -56,16 +57,6 @@ function ProcessingLayout({ data }: { data: SubtitleResponse }) {
           </div>
         )}
       </div>
-      {data.status === 'failed' && !data.error_message && (
-        <div className="flex justify-center pb-4">
-          <button
-            onClick={() => navigate('/')}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
-          >
-            回首頁
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -76,16 +67,14 @@ export function PlayerPage() {
   const { videoId } = useParams<{ videoId: string }>();
   const { data } = useSubtitleStream(videoId ?? null);
 
-  // Sticky-completed guard
-  const sawCompletedRef = useRef(false);
+  // Sticky-completed guard: once we observe `completed`, lock onto that data
+  // for the rest of the page lifetime. Setting state during render with an
+  // identity guard is the React-canonical pattern for derived state — it
+  // bails out cleanly when `data` is unchanged.
   const [lastCompletedData, setLastCompletedData] = useState<SubtitleResponse | null>(null);
-
-  useEffect(() => {
-    if (data?.status === 'completed') {
-      sawCompletedRef.current = true;
-      setLastCompletedData(data);
-    }
-  }, [data]);
+  if (data?.status === 'completed' && data !== lastCompletedData) {
+    setLastCompletedData(data);
+  }
 
   // TTFS instrumentation — fires exactly once when processing first delivers a segment
   const ttfsFiredRef = useRef(false);
@@ -102,7 +91,7 @@ export function PlayerPage() {
     }
   }, [data]);
 
-  const effectiveData = sawCompletedRef.current && lastCompletedData ? lastCompletedData : data;
+  const effectiveData = lastCompletedData ?? data;
 
   if (effectiveData == null) {
     return <LoadingSpinner progress={0} status="載入字幕中..." />;

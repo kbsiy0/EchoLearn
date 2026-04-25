@@ -8,7 +8,7 @@
  *   sticky-completed guard, TTFS instrumentation, mount-once invariant
  */
 
-import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import type { SubtitleResponse } from '../types/subtitle';
