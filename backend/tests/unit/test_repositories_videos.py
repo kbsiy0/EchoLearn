@@ -441,13 +441,13 @@ class TestGetVideoView:
         spy_repo = vr_mod.VideosRepo(spy)
         spy_repo.get_video_view(VIDEO_ID)
 
-        # Assert BEGIN DEFERRED comes first
+        # Total of exactly 5 calls: BEGIN, 3 SELECTs, COMMIT — no extras.
+        assert len(execute_calls) == 5
         assert execute_calls[0] == "BEGIN DEFERRED"
-        # Assert COMMIT is last
-        assert execute_calls[-1] == "COMMIT"
-        # Three SELECTs in between
-        select_calls = [s for s in execute_calls if s.startswith("SELECT")]
-        assert len(select_calls) == 3
+        assert execute_calls[1].startswith("SELECT")
+        assert execute_calls[2].startswith("SELECT")
+        assert execute_calls[3].startswith("SELECT")
+        assert execute_calls[4] == "COMMIT"
 
     def test_get_video_view_emits_rollback_on_read_error(self, db_conn):
         """Inject failure on 2nd SELECT; ROLLBACK must fire and exception re-raise."""

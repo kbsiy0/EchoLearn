@@ -455,13 +455,18 @@ def get_video_view(self, video_id: str) -> Optional[dict]:
 
     Atomicity: the method MUST open an explicit
     `self._conn.execute('BEGIN DEFERRED')` before the three SELECTs and
-    `self._conn.execute('COMMIT')` after. SQLite in WAL mode with
-    `isolation_level=None` (our connection default) does not implicitly
-    snapshot across multiple SELECTs; without the explicit transaction a
-    writer committing between them could expose torn state (e.g.,
-    jobs.status='completed' but segments table missing the last chunk).
-    Test: `test_get_video_view_opens_begin_deferred` spies on `conn.execute`
-    and asserts both BEGIN and COMMIT occur around the SELECTs.
+    `self._conn.execute('COMMIT')` after. The connection factory at
+    `db/connection.py` opens SQLite with Python's default
+    `isolation_level=''` (legacy implicit auto-begin), so a sequence of
+    SELECTs without an enclosing explicit transaction is NOT guaranteed
+    to read a single snapshot — sqlite3 may auto-commit between
+    statements, exposing torn state (e.g., `jobs.status='completed'` read
+    first, but `segments` queried after a writer commits the last chunk).
+    BEGIN DEFERRED takes a SHARED read lock for the duration of all
+    three SELECTs; in WAL mode this does not block writers but DOES pin
+    the snapshot. Test: `test_get_video_view_opens_begin_deferred` spies
+    on `conn.execute` and asserts the exact sequence is BEGIN DEFERRED →
+    3 SELECTs → COMMIT (5 calls total).
     """
 ```
 
