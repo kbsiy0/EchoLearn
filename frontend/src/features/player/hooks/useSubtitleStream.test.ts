@@ -173,7 +173,7 @@ describe('useSubtitleStream', () => {
     // Let initial (failing) fetch settle
     await act(async () => { await Promise.resolve(); });
     expect(result.current.error).not.toBeNull();
-    expect(result.current.error?.message).toBe('network blip');
+    expect(result.current.error).toBe('network blip');
 
     // Advance 1 tick → success response
     await act(async () => {

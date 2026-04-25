@@ -12,10 +12,10 @@ import { getSubtitles } from '../../../api/subtitles';
  */
 export function useSubtitleStream(videoId: string | null): {
   data: SubtitleResponse | null;
-  error: Error | null;
+  error: string | null;
 } {
   const [data, setData] = useState<SubtitleResponse | null>(null);
-  const [error, setError] = useState<Error | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (videoId === null) return;
@@ -37,7 +37,7 @@ export function useSubtitleStream(videoId: string | null): {
         }
       } catch (e) {
         if (cancelled) return;
-        setError(e instanceof Error ? e : new Error(String(e)));
+        setError(e instanceof Error ? e.message : String(e));
       }
     };
 
