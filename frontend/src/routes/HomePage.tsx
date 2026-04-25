@@ -2,9 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createJob } from '../api/subtitles';
 import { extractVideoId } from '../lib/youtube';
-import { useJobPolling } from '../features/jobs/hooks/useJobPolling';
 import { URLInput } from '../features/jobs/components/URLInput';
-import { LoadingSpinner } from '../features/player/components/LoadingSpinner';
 
 interface VideoSummary {
   video_id: string;
@@ -17,26 +15,9 @@ const API_BASE = 'http://localhost:8000/api';
 
 export function HomePage() {
   const navigate = useNavigate();
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [pendingVideoId, setPendingVideoId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [videos, setVideos] = useState<VideoSummary[]>([]);
-
-  const { job } = useJobPolling(jobId);
-
-  // Navigate when job completes
-  useEffect(() => {
-    if (job?.status === 'completed' && pendingVideoId) {
-      navigate(`/watch/${pendingVideoId}`);
-    }
-    if (job?.status === 'failed') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setError(job.error_message || '處理失敗');
-      setLoading(false);
-      setJobId(null);
-    }
-  }, [job, pendingVideoId, navigate]);
 
   // Fetch video history
   const fetchVideos = useCallback(async () => {
@@ -49,15 +30,12 @@ export function HomePage() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchVideos();
   }, [fetchVideos]);
 
   const handleSubmit = useCallback(async (url: string) => {
     setError(null);
     setLoading(true);
-    setJobId(null);
-    setPendingVideoId(null);
 
     const vid = extractVideoId(url);
     if (!vid) {
@@ -68,26 +46,12 @@ export function HomePage() {
 
     try {
       const result = await createJob(url);
-      setPendingVideoId(result.video_id);
-
-      if (result.cached || result.status === 'completed') {
-        navigate(`/watch/${result.video_id}`);
-        return;
-      }
-
-      if (result.job_id) {
-        setJobId(result.job_id);
-      }
+      navigate(`/watch/${result.video_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : '請求失敗');
       setLoading(false);
     }
   }, [navigate]);
-
-  const progressText =
-    job?.status === 'queued' ? '排隊中...' :
-    job?.status === 'processing' ? `處理中 (${job.progress}%)...` :
-    '提交中...';
 
   return (
     <main className="flex-1 flex flex-col overflow-hidden">
@@ -96,8 +60,6 @@ export function HomePage() {
         <URLInput onSubmit={handleSubmit} disabled={loading} />
         {error && <p className="mt-2 text-red-400 text-sm">{error}</p>}
       </div>
-
-      {loading && <LoadingSpinner progress={job?.progress ?? 0} status={progressText} />}
 
       {!loading && (
         <div className="flex-1 overflow-y-auto p-6">
