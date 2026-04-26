@@ -1,31 +1,10 @@
-"""Videos repository — CRUD for `videos` and `segments` tables.
-
-Phase 1b: publish_video has been split into two streaming-safe methods:
-  - upsert_video_clear_segments: called once per pipeline run to reset state.
-  - append_segments: called once per successful chunk to append rows atomically.
-  - get_video_view: aggregate read wrapped in BEGIN DEFERRED for consistent snapshot.
-
-get_video and get_segments are retained for other call sites.
-"""
+"""Videos repository — CRUD for `videos` and `segments` tables."""
 
 import json
-import re
 import sqlite3
-from datetime import datetime, timezone
 from typing import Optional
 
-_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
-
-
-def _validate_video_id(video_id: str) -> None:
-    if not _VIDEO_ID_RE.match(video_id):
-        raise ValueError(
-            f"Invalid video_id {video_id!r}: must match ^[A-Za-z0-9_-]{{11}}$"
-        )
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from ..db._helpers import validate_video_id, now_iso
 
 
 class VideosRepo:
@@ -33,10 +12,6 @@ class VideosRepo:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
-
-    # ------------------------------------------------------------------
-    # Streaming write pair (Phase 1b)
-    # ------------------------------------------------------------------
 
     def upsert_video_clear_segments(
         self,
@@ -54,8 +29,8 @@ class VideosRepo:
         This resets partial state so a re-submit for the same video_id wipes
         stale segments before new chunks start appending.
         """
-        _validate_video_id(video_id)
-        now = _now()
+        validate_video_id(video_id)
+        now = now_iso()
         with self._conn:
             self._conn.execute(
                 """
@@ -80,7 +55,7 @@ class VideosRepo:
         collide with already-appended segments. Raises on idx collision
         (enforced by PK (video_id, idx)).
         """
-        _validate_video_id(video_id)
+        validate_video_id(video_id)
         rows = [
             (
                 video_id,
@@ -103,10 +78,6 @@ class VideosRepo:
                 rows,
             )
 
-    # ------------------------------------------------------------------
-    # Aggregate read (Phase 1b)
-    # ------------------------------------------------------------------
-
     def get_video_view(self, video_id: str) -> Optional[dict]:
         """Aggregate read: latest job + videos row + all segments.
 
@@ -118,7 +89,7 @@ class VideosRepo:
         Wraps the three SELECTs in BEGIN DEFERRED / COMMIT so WAL-mode
         concurrency cannot tear the snapshot across the three tables.
         """
-        _validate_video_id(video_id)
+        validate_video_id(video_id)
         self._conn.execute("BEGIN DEFERRED")
         try:
             job_row = self._conn.execute(
@@ -146,13 +117,9 @@ class VideosRepo:
 
         return _assemble_view(job_row, video_row, segment_rows)
 
-    # ------------------------------------------------------------------
-    # Read methods (retained for existing call sites)
-    # ------------------------------------------------------------------
-
     def get_video(self, video_id: str) -> Optional[sqlite3.Row]:
         """Return the videos row or None."""
-        _validate_video_id(video_id)
+        validate_video_id(video_id)
         cursor = self._conn.execute(
             "SELECT * FROM videos WHERE video_id=?", (video_id,)
         )
@@ -167,17 +134,13 @@ class VideosRepo:
 
     def get_segments(self, video_id: str) -> list:
         """Return segments for video_id ordered by idx ASC."""
-        _validate_video_id(video_id)
+        validate_video_id(video_id)
         cursor = self._conn.execute(
             "SELECT * FROM segments WHERE video_id=? ORDER BY idx ASC",
             (video_id,),
         )
         return cursor.fetchall()
 
-
-# ------------------------------------------------------------------
-# Private helpers
-# ------------------------------------------------------------------
 
 def _assemble_view(job_row, video_row, segment_rows) -> dict:
     """Build the get_video_view result dict from ORM rows.

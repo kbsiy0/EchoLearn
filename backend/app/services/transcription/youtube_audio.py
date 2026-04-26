@@ -14,15 +14,14 @@ Public API:
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 from pathlib import Path
 
 from app.config import settings
+from app.db._helpers import VIDEO_ID_RE
 from app.models.schemas import VideoMetadata
 
-_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _AUDIO_DIR = Path("data/audio")
 
 
@@ -73,7 +72,7 @@ def probe_metadata(url: str) -> VideoMetadata:
         raise PipelineError("INVALID_URL", f"Cannot parse yt-dlp output for: {url}")
 
     video_id = info.get("id", "")
-    if not _VIDEO_ID_RE.match(video_id):
+    if not VIDEO_ID_RE.match(video_id):
         raise PipelineError("INVALID_URL", f"Unexpected video_id format: {video_id!r}")
 
     duration_sec = float(info.get("duration", 0))
@@ -106,7 +105,7 @@ def download_audio(video_id: str) -> Path:
         PipelineError(INVALID_URL): video_id fails regex check.
         PipelineError(FFMPEG_MISSING): yt-dlp/ffmpeg not available or download failed.
     """
-    if not _VIDEO_ID_RE.match(video_id):
+    if not VIDEO_ID_RE.match(video_id):
         raise PipelineError("INVALID_URL", f"Invalid video_id: {video_id!r}")
 
     if shutil.which("yt-dlp") is None:

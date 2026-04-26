@@ -7,11 +7,9 @@ emitted.  This module provides pure functions with no I/O or DB access.
 
 from typing import Any, Optional
 
-Word = dict[str, Any]   # {"text": str, "start": float, "end": float}
+from .segmenter import CLOSING_QUOTES, PUNCT_ENDINGS
 
-# Mirror of segmenter.py's punctuation rule — keep in sync if that ever moves.
-_CLOSING_QUOTES = '"\u201d\u2019\''
-_PUNCT_ENDINGS = ('.', '!', '?')
+Word = dict[str, Any]   # {"text": str, "start": float, "end": float}
 
 
 def split_last_open_sentence(
@@ -33,8 +31,8 @@ def split_last_open_sentence(
         return (None, [])
 
     last = segments[-1]
-    tail = last["text_en"].rstrip().rstrip(_CLOSING_QUOTES)
-    if tail.endswith(_PUNCT_ENDINGS):
+    tail = last["text_en"].rstrip().rstrip(CLOSING_QUOTES)
+    if tail.endswith(PUNCT_ENDINGS):
         return (None, segments)
 
     return (last, segments[:-1])

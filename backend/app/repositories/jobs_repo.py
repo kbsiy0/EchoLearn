@@ -7,16 +7,15 @@ Progress monotonicity is additionally enforced by SQL WHERE progress<=?.
 
 import logging
 import os
-import re
 import sqlite3
 import threading
 import weakref
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
-logger = logging.getLogger(__name__)
+from ..db._helpers import now_iso, validate_video_id
 
-_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+logger = logging.getLogger(__name__)
 
 # id(conn) → Lock mapping.  A finalizer removes entries when connections close.
 _conn_locks: dict = {}
@@ -42,17 +41,6 @@ def _lock_for(conn: sqlite3.Connection) -> threading.Lock:
         return _conn_locks[conn_id]
 
 
-def _validate_video_id(video_id: str) -> None:
-    if not _VIDEO_ID_RE.match(video_id):
-        raise ValueError(
-            f"Invalid video_id {video_id!r}: must match ^[A-Za-z0-9_-]{{11}}$"
-        )
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 class JobsRepo:
     """Repository for the `jobs` table."""
 
@@ -62,8 +50,8 @@ class JobsRepo:
 
     def create(self, job_id: str, video_id: str) -> None:
         """Insert a new job row with status='queued' and progress=0."""
-        _validate_video_id(video_id)
-        now = _now()
+        validate_video_id(video_id)
+        now = now_iso()
         with self._lock:
             self._conn.execute(
                 "INSERT INTO jobs (job_id, video_id, status, progress, created_at, updated_at)"
@@ -74,8 +62,8 @@ class JobsRepo:
 
     def create_completed(self, job_id: str, video_id: str) -> None:
         """Insert a synthetic completed row in one write (cache-hit path)."""
-        _validate_video_id(video_id)
-        now = _now()
+        validate_video_id(video_id)
+        now = now_iso()
         with self._lock:
             self._conn.execute(
                 "INSERT INTO jobs (job_id, video_id, status, progress, created_at, updated_at)"
@@ -113,7 +101,7 @@ class JobsRepo:
                 "UPDATE jobs SET progress=?, updated_at=?"
                 " WHERE job_id=? AND progress<=?"
                 " AND status NOT IN ('failed','completed')",
-                (progress, _now(), job_id, progress),
+                (progress, now_iso(), job_id, progress),
             )
             self._conn.commit()
 
@@ -136,7 +124,7 @@ class JobsRepo:
             self._conn.execute(
                 "UPDATE jobs SET status=?, error_code=?, error_message=?, updated_at=?"
                 " WHERE job_id=?",
-                (status, error_code, error_message, _now(), job_id),
+                (status, error_code, error_message, now_iso(), job_id),
             )
             self._conn.commit()
 
@@ -160,7 +148,7 @@ class JobsRepo:
                 WHERE status='processing' AND updated_at < ?
                 RETURNING job_id
                 """,
-                (_now(), cutoff_iso),
+                (now_iso(), cutoff_iso),
             )
             rows = cursor.fetchall()
             self._conn.commit()
