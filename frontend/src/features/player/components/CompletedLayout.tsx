@@ -1,29 +1,20 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import type { SubtitleResponse, SubtitleSegment } from '../../../types/subtitle';
+import type { SubtitleResponse } from '../../../types/subtitle';
 import { useYouTubePlayer } from '../hooks/useYouTubePlayer';
-import { useSubtitleSync, type Segment } from '../hooks/useSubtitleSync';
+import { useSubtitleSync } from '../hooks/useSubtitleSync';
 import { useAutoPause } from '../hooks/useAutoPause';
 import { useLoopSegment } from '../hooks/useLoopSegment';
 import { usePlaybackRate } from '../hooks/usePlaybackRate';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { computePlaybackFlags } from '../lib/flags';
+import { toSegments } from '../lib/toSegments';
 import { VideoPlayer } from './VideoPlayer';
 import { SubtitlePanel } from './SubtitlePanel';
 import { PlayerControls } from './PlayerControls';
+import { TitleBar } from './TitleBar';
 
 const PLAYER_CONTAINER_ID = 'yt-player';
-
-function toSegments(apiSegments: SubtitleSegment[]): Segment[] {
-  return apiSegments.map((s) => ({
-    idx: s.idx,
-    start: s.start,
-    end: s.end,
-    text_en: s.text_en,
-    text_zh: s.text_zh,
-    words: s.words.map((w) => ({ text: w.text, start: w.start, end: w.end })),
-  }));
-}
 
 interface Props {
   data: SubtitleResponse;
@@ -34,7 +25,7 @@ export function CompletedLayout({ data, videoId }: Props) {
   const [searchParams] = useSearchParams();
   const measure = searchParams.get('measure') === '1';
   const [loop, setLoop] = useState(false);
-  const segments = toSegments(data.segments);
+  const segments = useMemo(() => toSegments(data.segments), [data.segments]);
 
   const { player, isReady, playerState, seekTo, playVideo, pauseVideo } =
     useYouTubePlayer(videoId, PLAYER_CONTAINER_ID);
@@ -78,11 +69,7 @@ export function CompletedLayout({ data, videoId }: Props) {
 
   return (
     <>
-      {data.title && (
-        <span className="text-gray-400 text-sm truncate ml-4 shrink-0 py-2 px-6 bg-gray-800 border-b border-gray-700 block">
-          {data.title}
-        </span>
-      )}
+      <TitleBar title={data.title} />
       <main className="flex-1 flex gap-4 p-4 overflow-hidden">
         <div className="w-1/2 flex flex-col gap-4">
           <VideoPlayer videoId={videoId} containerId={PLAYER_CONTAINER_ID} />

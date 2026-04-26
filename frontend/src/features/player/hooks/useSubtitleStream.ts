@@ -27,7 +27,7 @@ export function useSubtitleStream(videoId: string | null): {
       try {
         const resp = await getSubtitles(videoId);
         if (cancelled) return;
-        setData(resp);
+        setData((prev) => (sameShape(prev, resp) ? prev : resp));
         setError(null);
         if (resp.status === 'completed' || resp.status === 'failed') {
           if (intervalId !== null) {
@@ -51,4 +51,14 @@ export function useSubtitleStream(videoId: string | null): {
   }, [videoId]);
 
   return { data, error };
+}
+
+function sameShape(prev: SubtitleResponse | null, next: SubtitleResponse): boolean {
+  if (prev === null) return false;
+  return (
+    prev.status === next.status &&
+    prev.progress === next.progress &&
+    prev.segments.length === next.segments.length &&
+    prev.error_code === next.error_code
+  );
 }

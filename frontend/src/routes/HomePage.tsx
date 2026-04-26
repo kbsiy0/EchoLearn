@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { API_BASE } from '../api/base';
 import { createJob } from '../api/subtitles';
 import { extractVideoId } from '../lib/youtube';
 import { URLInput } from '../features/jobs/components/URLInput';
@@ -10,8 +11,6 @@ interface VideoSummary {
   duration_sec: number;
   created_at: string;
 }
-
-const API_BASE = 'http://localhost:8000/api';
 
 export function HomePage() {
   const navigate = useNavigate();

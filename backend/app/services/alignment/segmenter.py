@@ -18,8 +18,8 @@ from typing import Any
 
 
 Word = dict[str, Any]   # {"text": str, "start": float, "end": float}
-_CLOSING_QUOTES = '"\u201d\u2019\''
-_PUNCT_ENDINGS = ('.', '!', '?')
+CLOSING_QUOTES = '"\u201d\u2019\''
+PUNCT_ENDINGS = ('.', '!', '?')
 
 
 def _flush(buffer: list[Word], idx: int) -> dict:
@@ -62,9 +62,9 @@ def segment(words: list[Word]) -> list[dict]:
             words[i + 1]["start"] - w["end"] if i + 1 < len(words) else None
         )
 
-        tail = w["text"].rstrip().rstrip(_CLOSING_QUOTES)
+        tail = w["text"].rstrip().rstrip(CLOSING_QUOTES)
         should_cut = (
-            (tail.endswith(_PUNCT_ENDINGS) and duration >= 3.0)
+            (tail.endswith(PUNCT_ENDINGS) and duration >= 3.0)
             or (next_gap is not None and next_gap >= 0.7 and duration >= 3.0)
             or duration >= 15.0
         )

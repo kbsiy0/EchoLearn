@@ -1,7 +1,4 @@
-"""Per-chunk loop implementation for Pipeline.run (Phase 1b).
-
-Extracted from pipeline/__init__.py to keep each file under the 200-LOC ceiling.
-"""
+"""Per-chunk streaming loop for Pipeline.run."""
 
 from __future__ import annotations
 
@@ -66,33 +63,39 @@ def run_chunk_loop(
             # carryover_buffer unchanged
 
         if emit:
-            texts_en = [s["text_en"] for s in emit]
-            try:
-                translations = pipeline._translator.translate_batch(texts_en)
-            except Exception as exc:
-                raise PipelineError("TRANSLATION_ERROR", str(exc)) from exc
-            for i, seg in enumerate(emit):
-                seg["text_zh"] = translations[i]
-                seg["idx"] = next_segment_idx + i
-            pipeline._videos.append_segments(video_id, emit)
-            next_segment_idx += len(emit)
+            next_segment_idx = _translate_and_persist(
+                pipeline, video_id, emit, next_segment_idx
+            )
 
         pipeline._jobs.update_progress(
             job_id, _compute_progress(spec.chunk_idx, n)
         )
 
-    # End-of-stream flush
     if carryover_buffer:
         final_segs = _segment(carryover_buffer)
-        texts_en = [s["text_en"] for s in final_segs]
-        try:
-            translations = pipeline._translator.translate_batch(texts_en)
-        except Exception as exc:
-            raise PipelineError("TRANSLATION_ERROR", str(exc)) from exc
-        for i, seg in enumerate(final_segs):
-            seg["text_zh"] = translations[i]
-            seg["idx"] = next_segment_idx + i
-        pipeline._videos.append_segments(video_id, final_segs)
+        _translate_and_persist(pipeline, video_id, final_segs, next_segment_idx)
+
+
+def _translate_and_persist(
+    pipeline: "Pipeline",
+    video_id: str,
+    segments: list[dict],
+    next_segment_idx: int,
+) -> int:
+    """Batch-translate, assign monotone idx + text_zh, and append in one DB call.
+
+    Returns the next idx to use after these segments.
+    """
+    texts_en = [s["text_en"] for s in segments]
+    try:
+        translations = pipeline._translator.translate_batch(texts_en)
+    except Exception as exc:
+        raise PipelineError("TRANSLATION_ERROR", str(exc)) from exc
+    for i, seg in enumerate(segments):
+        seg["text_zh"] = translations[i]
+        seg["idx"] = next_segment_idx + i
+    pipeline._videos.append_segments(video_id, segments)
+    return next_segment_idx + len(segments)
 
 
 def _compute_progress(chunk_idx: int, total_chunks: int) -> int:
@@ -133,4 +136,4 @@ def _transcribe_with_retry(
             raise
         except Exception as exc:
             raise PipelineError("WHISPER_ERROR", str(exc)) from exc
-    return []  # unreachable
+    raise AssertionError("unreachable")
