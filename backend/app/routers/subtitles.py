@@ -1,28 +1,15 @@
-"""Subtitles router — GET /api/subtitles/{video_id}.
-
-Phase 1b: endpoint now serves the live subtitle view via get_video_view,
-returning status/progress/partial-segments at every pipeline stage.
-"""
+"""Subtitles router — GET /api/subtitles/{video_id}."""
 from __future__ import annotations
 
 import json
-import sqlite3
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
-from app.db.connection import get_connection
+from app.db.connection import DbConn
 from app.models.schemas import Segment, SubtitleResponse, WordTiming
 from app.repositories.videos_repo import VideosRepo
 
 router = APIRouter(prefix="/api/subtitles", tags=["subtitles"])
-
-
-def get_db_conn() -> sqlite3.Connection:
-    return get_connection()
-
-
-DbConn = Annotated[sqlite3.Connection, Depends(get_db_conn)]
 
 
 @router.get("/{video_id}", response_model=SubtitleResponse)

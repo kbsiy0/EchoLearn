@@ -1,23 +1,13 @@
 """Videos router — GET /api/videos."""
 from __future__ import annotations
 
-import sqlite3
-from typing import Annotated
+from fastapi import APIRouter
 
-from fastapi import APIRouter, Depends
-
-from app.db.connection import get_connection
+from app.db.connection import DbConn
 from app.models.schemas import VideoSummary
 from app.repositories.videos_repo import VideosRepo
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
-
-
-def get_db_conn() -> sqlite3.Connection:
-    return get_connection()
-
-
-DbConn = Annotated[sqlite3.Connection, Depends(get_db_conn)]
 
 
 @router.get("", response_model=list[VideoSummary])

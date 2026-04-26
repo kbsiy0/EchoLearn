@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 import uuid
 from typing import Annotated, Any
 
@@ -10,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, constr
 
-from app.db.connection import get_connection
+from app.db.connection import DbConn
 from app.models.schemas import JobStatus
 from app.repositories.jobs_repo import JobsRepo
 from app.repositories.videos_repo import VideosRepo
@@ -29,19 +28,10 @@ class CreateJobBody(BaseModel):
     url: constr(max_length=2048)  # type: ignore[valid-type]
 
 
-# ---------------------------------------------------------------------------
-# Dependencies
-# ---------------------------------------------------------------------------
-
-def get_db_conn() -> sqlite3.Connection:
-    return get_connection()
-
-
 def get_runner(request: Request) -> Any:
     return request.app.state.runner
 
 
-DbConn = Annotated[sqlite3.Connection, Depends(get_db_conn)]
 Runner = Annotated[Any, Depends(get_runner)]
 
 

@@ -6,22 +6,20 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db.connection import get_connection
+from app.db.connection import get_connection, get_db_conn
 from app.main import app
 from app.repositories.videos_repo import VideosRepo
 
 
 def _make_client(db_conn: sqlite3.Connection) -> TestClient:
     """TestClient with DB overridden to use in-memory connection."""
-    import app.routers.videos as videos_mod
-
     def _override_conn() -> sqlite3.Connection:
         return db_conn
 
-    app.dependency_overrides[videos_mod.get_db_conn] = _override_conn
+    app.dependency_overrides[get_db_conn] = _override_conn
     client = TestClient(app, raise_server_exceptions=True)
     yield client
-    app.dependency_overrides.pop(videos_mod.get_db_conn, None)
+    app.dependency_overrides.pop(get_db_conn, None)
 
 
 @pytest.fixture()

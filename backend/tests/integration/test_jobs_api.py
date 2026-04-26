@@ -19,9 +19,11 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db.connection import get_db_conn
 from app.main import app
 from app.repositories.jobs_repo import JobsRepo
 from app.repositories.videos_repo import VideosRepo
+from app.routers import jobs as jobs_mod
 
 
 # ---------------------------------------------------------------------------
@@ -54,38 +56,34 @@ def fake_runner() -> FakeRunner:
 @pytest.fixture()
 def client(db_conn: sqlite3.Connection, fake_runner: FakeRunner):
     """TestClient with in-memory DB and fake runner injected."""
-    import app.routers.jobs as jobs_mod
-
     def _override_conn() -> sqlite3.Connection:
         return db_conn
 
     def _override_runner() -> FakeRunner:
         return fake_runner
 
-    app.dependency_overrides[jobs_mod.get_db_conn] = _override_conn
+    app.dependency_overrides[get_db_conn] = _override_conn
     app.dependency_overrides[jobs_mod.get_runner] = _override_runner
 
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
 
-    app.dependency_overrides.pop(jobs_mod.get_db_conn, None)
+    app.dependency_overrides.pop(get_db_conn, None)
     app.dependency_overrides.pop(jobs_mod.get_runner, None)
 
 
 @pytest.fixture()
 def subtitles_client(db_conn: sqlite3.Connection):
     """TestClient for /api/subtitles/{video_id} with in-memory DB."""
-    import app.routers.subtitles as sub_mod
-
     def _override_conn() -> sqlite3.Connection:
         return db_conn
 
-    app.dependency_overrides[sub_mod.get_db_conn] = _override_conn
+    app.dependency_overrides[get_db_conn] = _override_conn
 
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
 
-    app.dependency_overrides.pop(sub_mod.get_db_conn, None)
+    app.dependency_overrides.pop(get_db_conn, None)
 
 
 # ---------------------------------------------------------------------------
