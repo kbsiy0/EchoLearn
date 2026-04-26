@@ -21,6 +21,7 @@ from pathlib import Path
 from app.config import settings
 from app.db._helpers import VIDEO_ID_RE
 from app.models.schemas import VideoMetadata
+from app.services.errors import ErrorCode
 
 _AUDIO_DIR = Path("data/audio")
 
@@ -63,22 +64,22 @@ def probe_metadata(url: str) -> VideoMetadata:
         stderr = result.stderr.lower()
         if any(kw in stderr for kw in ("private", "unavailable", "members only",
                                         "age", "removed", "not available")):
-            raise PipelineError("VIDEO_UNAVAILABLE", f"Video unavailable: {url}")
-        raise PipelineError("INVALID_URL", f"Cannot retrieve metadata for URL: {url}")
+            raise PipelineError(ErrorCode.VIDEO_UNAVAILABLE, f"Video unavailable: {url}")
+        raise PipelineError(ErrorCode.INVALID_URL, f"Cannot retrieve metadata for URL: {url}")
 
     try:
         info = json.loads(result.stdout)
     except json.JSONDecodeError:
-        raise PipelineError("INVALID_URL", f"Cannot parse yt-dlp output for: {url}")
+        raise PipelineError(ErrorCode.INVALID_URL, f"Cannot parse yt-dlp output for: {url}")
 
     video_id = info.get("id", "")
     if not VIDEO_ID_RE.match(video_id):
-        raise PipelineError("INVALID_URL", f"Unexpected video_id format: {video_id!r}")
+        raise PipelineError(ErrorCode.INVALID_URL, f"Unexpected video_id format: {video_id!r}")
 
     duration_sec = float(info.get("duration", 0))
     if duration_sec / 60 > settings.MAX_VIDEO_MINUTES:
         raise PipelineError(
-            "VIDEO_TOO_LONG",
+            ErrorCode.VIDEO_TOO_LONG,
             f"Video is {duration_sec / 60:.1f} min, max is {settings.MAX_VIDEO_MINUTES} min",
         )
 
@@ -106,10 +107,10 @@ def download_audio(video_id: str) -> Path:
         PipelineError(FFMPEG_MISSING): yt-dlp/ffmpeg not available or download failed.
     """
     if not VIDEO_ID_RE.match(video_id):
-        raise PipelineError("INVALID_URL", f"Invalid video_id: {video_id!r}")
+        raise PipelineError(ErrorCode.INVALID_URL, f"Invalid video_id: {video_id!r}")
 
     if shutil.which("yt-dlp") is None:
-        raise PipelineError("FFMPEG_MISSING", "yt-dlp is not installed")
+        raise PipelineError(ErrorCode.FFMPEG_MISSING, "yt-dlp is not installed")
 
     _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     output_path = _AUDIO_DIR / f"{video_id}.mp3"
@@ -131,6 +132,6 @@ def download_audio(video_id: str) -> Path:
     )
 
     if result.returncode != 0:
-        raise PipelineError("FFMPEG_MISSING", f"Audio download failed: {result.stderr[:200]}")
+        raise PipelineError(ErrorCode.FFMPEG_MISSING, f"Audio download failed: {result.stderr[:200]}")
 
     return output_path

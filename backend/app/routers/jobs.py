@@ -13,6 +13,7 @@ from app.db.connection import DbConn
 from app.models.schemas import JobStatus
 from app.repositories.jobs_repo import JobsRepo
 from app.repositories.videos_repo import VideosRepo
+from app.services.errors import ErrorCode
 from app.services.url_validator import validate_youtube_url
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ def create_job(body: CreateJobBody, conn: DbConn, runner: Runner):
         safe_msg = _safe_error_message(safe_msg)
         raise HTTPException(
             status_code=400,
-            detail={"error_code": "INVALID_URL", "error_message": safe_msg},
+            detail={"error_code": ErrorCode.INVALID_URL.value, "error_message": safe_msg},
         )
 
     jobs_repo = JobsRepo(conn)

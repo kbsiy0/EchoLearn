@@ -1,12 +1,8 @@
-"""Pipeline package — per-chunk streaming pipeline (Phase 1b).
+"""Pipeline package — per-chunk streaming transcription pipeline.
 
-Public API (unchanged from Phase 0):
+Public API:
     Pipeline   — class with injectable dependencies
     run        — module-level function for production use
-    _SAFE_MESSAGES — module-level constant for error sanitization
-
-The chunk loop implementation lives in _chunk_loop.py to keep each file
-under the 200-LOC ceiling.
 """
 
 from __future__ import annotations
@@ -30,23 +26,10 @@ from app.services.transcription.youtube_audio import (
     download_audio as _download_audio,
     probe_metadata as _probe_metadata,
 )
+from app.services.errors import ErrorCode, safe_message
 from app.services.pipeline._chunk_loop import run_chunk_loop
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Safe user-facing error messages (design §5: sanitization)
-# ---------------------------------------------------------------------------
-
-_SAFE_MESSAGES: dict[str, str] = {
-    "VIDEO_TOO_LONG":    "影片超過 20 分鐘上限",
-    "FFMPEG_MISSING":    "伺服器缺少 ffmpeg",
-    "DOWNLOAD_ERROR":    "無法下載影片",
-    "WHISPER_ERROR":     "字幕轉錄失敗，請稍後再試",
-    "TRANSLATION_ERROR": "翻譯失敗，請稍後再試",
-    "INTERNAL_ERROR":    "內部錯誤",
-}
-
 
 # ---------------------------------------------------------------------------
 # Protocols
@@ -63,10 +46,6 @@ class TranslatorProtocol(Protocol):
 ProbeCallable = Callable[[str], _VideoMetadata]
 DownloadCallable = Callable[[str], Path]
 ExtractChunkCallable = Callable[[Path, ChunkSpec, Path], Path]
-
-
-def _safe_message(error_code: str) -> str:
-    return _SAFE_MESSAGES.get(error_code, _SAFE_MESSAGES["INTERNAL_ERROR"])
 
 
 # ---------------------------------------------------------------------------
@@ -138,15 +117,15 @@ class Pipeline:
             self._jobs.update_status(
                 job_id, "failed",
                 error_code=exc.error_code,
-                error_message=_safe_message(exc.error_code),
+                error_message=safe_message(exc.error_code),
             )
 
         except Exception as exc:
             logger.warning("Pipeline internal error for job %s: %s", job_id, exc)
             self._jobs.update_status(
                 job_id, "failed",
-                error_code="INTERNAL_ERROR",
-                error_message=_safe_message("INTERNAL_ERROR"),
+                error_code=ErrorCode.INTERNAL_ERROR,
+                error_message=safe_message(ErrorCode.INTERNAL_ERROR),
             )
 
         finally:
@@ -155,10 +134,6 @@ class Pipeline:
             if chunk_dir is not None:
                 shutil.rmtree(chunk_dir, ignore_errors=True)
 
-
-# ---------------------------------------------------------------------------
-# Module-level run (backward compat)
-# ---------------------------------------------------------------------------
 
 def run(job_id: str) -> None:
     """Run pipeline using real clients from environment."""

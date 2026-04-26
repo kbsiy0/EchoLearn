@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from app.db.connection import DbConn
 from app.models.schemas import Segment, SubtitleResponse, WordTiming
 from app.repositories.videos_repo import VideosRepo
+from app.services.errors import ErrorCode
 
 router = APIRouter(prefix="/api/subtitles", tags=["subtitles"])
 
@@ -21,12 +22,12 @@ def get_subtitles(video_id: str, conn: DbConn) -> SubtitleResponse:
     except ValueError:
         raise HTTPException(
             status_code=404,
-            detail={"error_code": "NOT_FOUND", "error_message": "invalid video_id"},
+            detail={"error_code": ErrorCode.NOT_FOUND.value, "error_message": "invalid video_id"},
         )
     if view is None:
         raise HTTPException(
             status_code=404,
-            detail={"error_code": "NOT_FOUND", "error_message": "subtitle not found"},
+            detail={"error_code": ErrorCode.NOT_FOUND.value, "error_message": "subtitle not found"},
         )
 
     segments = [
