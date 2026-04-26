@@ -22,6 +22,6 @@ export async function pollJobStatus(jobId: string): Promise<JobStatus> {
 
 export async function getSubtitles(videoId: string): Promise<SubtitleResponse> {
   const res = await fetch(`${API_BASE}/subtitles/${videoId}`);
-  if (!res.ok) throw new Error('Failed to fetch subtitles');
+  if (!res.ok) throw new Error(`Failed to fetch subtitles: ${res.status}`);
   return res.json();
 }

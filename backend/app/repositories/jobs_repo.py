@@ -111,14 +111,16 @@ class JobsRepo:
 
             cursor = self._conn.execute(
                 "UPDATE jobs SET progress=?, updated_at=?"
-                " WHERE job_id=? AND progress<=?",
+                " WHERE job_id=? AND progress<=?"
+                " AND status NOT IN ('failed','completed')",
                 (progress, _now(), job_id, progress),
             )
             self._conn.commit()
 
         if cursor.rowcount == 0:
             logger.warning(
-                "update_progress conditional no-op: %s tried %d but DB has higher",
+                "update_progress no-op: %s tried %d (rejected by status guard "
+                "OR DB already has higher progress)",
                 job_id, progress,
             )
 

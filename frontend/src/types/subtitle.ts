@@ -15,10 +15,13 @@ export interface SubtitleSegment {
 
 export interface SubtitleResponse {
   video_id: string;
-  title: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  progress: number;
+  title: string | null;
+  duration_sec: number | null;
   segments: SubtitleSegment[];
-  source: string;
-  created_at: string;
+  error_code: string | null;
+  error_message: string | null;
 }
 
 export interface JobStatus {

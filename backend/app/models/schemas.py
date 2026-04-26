@@ -29,9 +29,13 @@ class VideoMetadata(BaseModel):
 
 class SubtitleResponse(BaseModel):
     video_id: str
-    title: str
-    duration_sec: float
+    status: Literal["queued", "processing", "completed", "failed"]
+    progress: int  # 0..100
+    title: Optional[str] = None
+    duration_sec: Optional[float] = None
     segments: list[Segment]
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class VideoSummary(BaseModel):

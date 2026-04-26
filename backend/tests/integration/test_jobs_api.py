@@ -132,12 +132,11 @@ def test_cache_hit_returns_completed_job_without_running_pipeline(
 ):
     """If a videos row exists, return synthetic completed job without submitting."""
     videos_repo = VideosRepo(db_conn)
-    videos_repo.publish_video(
+    videos_repo.upsert_video_clear_segments(
         video_id=VIDEO_ID,
         title="Rick Astley",
         duration_sec=213.0,
         source="whisper",
-        segments=[],
     )
 
     resp = client.post("/api/subtitles/jobs", json={"url": VALID_URL})
@@ -202,20 +201,29 @@ def test_get_subtitles_not_found(subtitles_client: TestClient):
 def test_get_subtitles_returns_data(
     subtitles_client: TestClient, db_conn: sqlite3.Connection
 ):
+    """GET /api/subtitles/{video_id} returns Phase 1b shape after pipeline completes."""
+    jobs_repo = JobsRepo(db_conn)
     videos_repo = VideosRepo(db_conn)
-    videos_repo.publish_video(
+
+    job_id = str(uuid.uuid4())
+    jobs_repo.create(job_id, VIDEO_ID)
+    videos_repo.upsert_video_clear_segments(
         video_id=VIDEO_ID,
         title="Rick Astley",
         duration_sec=213.0,
         source="whisper",
-        segments=[],
     )
+    jobs_repo.update_progress(job_id, 100)
+    jobs_repo.update_status(job_id, "completed")
 
     resp = subtitles_client.get(f"/api/subtitles/{VIDEO_ID}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["video_id"] == VIDEO_ID
     assert data["title"] == "Rick Astley"
+    assert data["status"] == "completed"
+    assert data["progress"] == 100
+    assert data["segments"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -306,12 +314,11 @@ def test_cache_hit_returns_pollable_job(
 ):
     """POST cache-hit → job_id → GET /jobs/{job_id} must return 200 status=completed."""
     videos_repo = VideosRepo(db_conn)
-    videos_repo.publish_video(
+    videos_repo.upsert_video_clear_segments(
         video_id=VIDEO_ID,
         title="Rick Astley",
         duration_sec=213.0,
         source="whisper",
-        segments=[],
     )
 
     # Trigger cache-hit path
