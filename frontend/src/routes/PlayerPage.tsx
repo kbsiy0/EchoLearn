@@ -1,40 +1,24 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import type { SubtitleResponse, SubtitleSegment } from '../types/subtitle';
+import type { SubtitleResponse } from '../types/subtitle';
 import { useSubtitleStream } from '../features/player/hooks/useSubtitleStream';
-import type { Segment } from '../features/player/hooks/useSubtitleSync';
 import { LoadingSpinner } from '../features/player/components/LoadingSpinner';
 import { ProcessingPlaceholder } from '../features/player/components/ProcessingPlaceholder';
 import { SubtitlePanel } from '../features/player/components/SubtitlePanel';
+import { TitleBar } from '../features/player/components/TitleBar';
 import { CompletedLayout } from '../features/player/components/CompletedLayout';
-
-function toSegments(apiSegments: SubtitleSegment[]): Segment[] {
-  return apiSegments.map((s) => ({
-    idx: s.idx,
-    start: s.start,
-    end: s.end,
-    text_en: s.text_en,
-    text_zh: s.text_zh,
-    words: s.words.map((w) => ({ text: w.text, start: w.start, end: w.end })),
-  }));
-}
-
-// --- ProcessingLayout -------------------------------------------------------
+import { toSegments } from '../features/player/lib/toSegments';
 
 function ProcessingLayout({ data }: { data: SubtitleResponse }) {
   const hasSegments = data.segments.length > 0;
-  const segments = toSegments(data.segments);
+  const segments = useMemo(() => toSegments(data.segments), [data.segments]);
   const noop = useCallback(() => {}, []);
   const errorForPlaceholder =
     data.status === 'failed' ? (data.error_message ?? '處理失敗') : undefined;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {data.title && (
-        <span className="text-gray-400 text-sm truncate ml-4 shrink-0 py-2 px-6 bg-gray-800 border-b border-gray-700 block">
-          {data.title}
-        </span>
-      )}
+      <TitleBar title={data.title} />
       <div className="flex-1 flex flex-col overflow-hidden">
         <ProcessingPlaceholder
           progress={data.progress}
@@ -78,18 +62,20 @@ export function PlayerPage() {
 
   // TTFS instrumentation — fires exactly once when processing first delivers a segment
   const ttfsFiredRef = useRef(false);
+  const ttfsStatus = data?.status;
+  const ttfsSegmentCount = data?.segments.length ?? 0;
   useEffect(() => {
     if (
       !ttfsFiredRef.current &&
-      data?.status === 'processing' &&
-      data.segments.length > 0
+      ttfsStatus === 'processing' &&
+      ttfsSegmentCount > 0
     ) {
       window.dispatchEvent(
         new CustomEvent('el:first-segment', { detail: { t: performance.now() } }),
       );
       ttfsFiredRef.current = true;
     }
-  }, [data]);
+  }, [ttfsStatus, ttfsSegmentCount]);
 
   const effectiveData = lastCompletedData ?? data;
 
