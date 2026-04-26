@@ -166,28 +166,6 @@ def test_retry_after_failure_creates_new_job(
 
 
 # ---------------------------------------------------------------------------
-# Tests: GET /api/subtitles/jobs/{job_id}
-# ---------------------------------------------------------------------------
-
-def test_get_job_status_unknown_id(client: TestClient):
-    resp = client.get(f"/api/subtitles/jobs/{uuid.uuid4()}")
-    assert resp.status_code == 404
-
-
-def test_get_job_status_returns_job(
-    client: TestClient, db_conn: sqlite3.Connection
-):
-    resp = client.post("/api/subtitles/jobs", json={"url": VALID_URL})
-    job_id = resp.json()["job_id"]
-
-    resp2 = client.get(f"/api/subtitles/jobs/{job_id}")
-    assert resp2.status_code == 200
-    data = resp2.json()
-    assert data["job_id"] == job_id
-    assert data["status"] == "queued"
-
-
-# ---------------------------------------------------------------------------
 # Tests: GET /api/subtitles/{video_id}
 # ---------------------------------------------------------------------------
 
@@ -301,33 +279,3 @@ def test_valid_but_unknown_video_id_returns_404(subtitles_client: TestClient):
     assert data.get("error_code") == "NOT_FOUND"
 
 
-# ---------------------------------------------------------------------------
-# Tests: M1 — cache-hit synthetic job must be pollable via GET /jobs/{job_id}
-# ---------------------------------------------------------------------------
-
-def test_cache_hit_returns_pollable_job(
-    client: TestClient,
-    db_conn: sqlite3.Connection,
-    fake_runner: FakeRunner,
-):
-    """POST cache-hit → job_id → GET /jobs/{job_id} must return 200 status=completed."""
-    videos_repo = VideosRepo(db_conn)
-    videos_repo.upsert_video_clear_segments(
-        video_id=VIDEO_ID,
-        title="Rick Astley",
-        duration_sec=213.0,
-        source="whisper",
-    )
-
-    # Trigger cache-hit path
-    post_resp = client.post("/api/subtitles/jobs", json={"url": VALID_URL})
-    assert post_resp.status_code == 200
-    job_id = post_resp.json()["job_id"]
-
-    # Poll the returned job_id — must be persisted
-    get_resp = client.get(f"/api/subtitles/jobs/{job_id}")
-    assert get_resp.status_code == 200
-    data = get_resp.json()
-    assert data["job_id"] == job_id
-    assert data["status"] == "completed"
-    assert data["progress"] == 100

@@ -1,4 +1,4 @@
-"""Jobs router — POST /api/subtitles/jobs, GET /api/subtitles/jobs/{job_id}."""
+"""Jobs router — POST /api/subtitles/jobs."""
 from __future__ import annotations
 
 import logging
@@ -123,15 +123,3 @@ def create_job(body: CreateJobBody, conn: DbConn, runner: Runner):
     )
 
 
-# ---------------------------------------------------------------------------
-# GET /api/subtitles/jobs/{job_id}
-# ---------------------------------------------------------------------------
-
-@router.get("/jobs/{job_id}")
-def get_job(job_id: str, conn: DbConn):
-    """Return job status by job_id."""
-    repo = JobsRepo(conn)
-    row = repo.get(job_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return _row_to_job_status(row)
