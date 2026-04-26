@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from app.repositories.jobs_repo import JobsRepo
+from app.services.errors import ErrorCode
 from app.services.transcription.youtube_audio import PipelineError
 
 logger = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ class JobRunner:
             )
             self._fail_job(
                 job_id,
-                error_code="INTERNAL_ERROR",
+                error_code=ErrorCode.INTERNAL_ERROR,
                 error_message=str(exc),
             )
 

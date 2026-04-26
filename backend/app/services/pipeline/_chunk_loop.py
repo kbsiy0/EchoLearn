@@ -16,6 +16,7 @@ from app.services.transcription.audio_chunking import (
     ChunkSpec,
     clip_to_valid_interval,
 )
+from app.services.errors import ErrorCode
 from app.services.transcription.whisper import WhisperTransientError
 from app.services.transcription.youtube_audio import PipelineError
 
@@ -90,7 +91,7 @@ def _translate_and_persist(
     try:
         translations = pipeline._translator.translate_batch(texts_en)
     except Exception as exc:
-        raise PipelineError("TRANSLATION_ERROR", str(exc)) from exc
+        raise PipelineError(ErrorCode.TRANSLATION_ERROR, str(exc)) from exc
     for i, seg in enumerate(segments):
         seg["text_zh"] = translations[i]
         seg["idx"] = next_segment_idx + i
@@ -127,7 +128,7 @@ def _transcribe_with_retry(
             return clip_to_valid_interval(raw_words, spec)
         except WhisperTransientError as exc:
             if attempt == 2:
-                raise PipelineError("WHISPER_ERROR", str(exc)) from exc
+                raise PipelineError(ErrorCode.WHISPER_ERROR, str(exc)) from exc
             if exc.retry_after is not None:
                 time.sleep(min(exc.retry_after, 30))
             else:
@@ -135,5 +136,5 @@ def _transcribe_with_retry(
         except PipelineError:
             raise
         except Exception as exc:
-            raise PipelineError("WHISPER_ERROR", str(exc)) from exc
+            raise PipelineError(ErrorCode.WHISPER_ERROR, str(exc)) from exc
     raise AssertionError("unreachable")

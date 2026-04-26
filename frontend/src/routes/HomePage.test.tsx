@@ -1,13 +1,3 @@
-/**
- * Tests for T11 — HomePage navigates immediately after createJob resolves.
- *
- * Strategy:
- * - Mock `createJob` from `../api/subtitles`
- * - Mock `useNavigate` from react-router-dom
- * - Mock `useJobPolling` to assert it is never invoked with a real job ID
- * - Use fake timers to advance time and assert no polling activity
- */
-
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
@@ -26,12 +16,6 @@ vi.mock('react-router-dom', async (importOriginal) => {
 
 vi.mock('../api/subtitles', () => ({
   createJob: vi.fn(),
-}));
-
-// Track calls to useJobPolling
-const mockUseJobPolling = vi.fn(() => ({ job: null, error: null }));
-vi.mock('../features/jobs/hooks/useJobPolling', () => ({
-  useJobPolling: (...args: unknown[]) => mockUseJobPolling(...args),
 }));
 
 // Mock fetch for video history to avoid unhandled requests
@@ -77,7 +61,6 @@ async function typeAndSubmit(url = 'https://www.youtube.com/watch?v=abc12345678'
 describe('HomePage — T11: navigate immediately after createJob', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseJobPolling.mockReturnValue({ job: null, error: null });
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => [],
@@ -126,33 +109,6 @@ describe('HomePage — T11: navigate immediately after createJob', () => {
     // Also check by role — spinner typically has no specific role, so check by text absence
     expect(screen.queryByText(/處理中/)).toBeNull();
     expect(screen.queryByText(/排隊中/)).toBeNull();
-  });
-
-  it('test_submit_does_not_start_job_polling', async () => {
-    vi.useFakeTimers();
-
-    (createJob as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      video_id: 'abc',
-      job_id: 'job-001',
-      status: 'queued',
-    });
-
-    renderHomePage();
-
-    await act(async () => {
-      await typeAndSubmit();
-    });
-
-    // Advance timers by > 1000ms — if polling were active it would fire
-    act(() => {
-      vi.advanceTimersByTime(3000);
-    });
-
-    // useJobPolling must never have been called with a non-null job ID
-    const callsWithJobId = mockUseJobPolling.mock.calls.filter(
-      (args) => args[0] !== null && args[0] !== undefined,
-    );
-    expect(callsWithJobId).toHaveLength(0);
   });
 
   it('test_submit_failure_keeps_user_on_homepage', async () => {

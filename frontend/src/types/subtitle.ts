@@ -23,12 +23,3 @@ export interface SubtitleResponse {
   error_code: string | null;
   error_message: string | null;
 }
-
-export interface JobStatus {
-  job_id: string;
-  video_id: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
-  progress: number;
-  error: { code: string; message: string; retryable: boolean } | null;
-  cached: boolean;
-}

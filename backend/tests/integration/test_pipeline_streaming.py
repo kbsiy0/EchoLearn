@@ -629,8 +629,8 @@ class TestErrorSanitization:
             f"Raw API key leaked into DB: {job['error_message']}"
         )
         # Canonical message must be in DB
-        from app.services.pipeline import _SAFE_MESSAGES
-        assert job["error_message"] in _SAFE_MESSAGES.values(), (
+        from app.services.errors import SAFE_MESSAGES
+        assert job["error_message"] in SAFE_MESSAGES.values(), (
             f"DB error_message '{job['error_message']}' is not a canonical safe message"
         )
         # Raw message must appear in log records only

@@ -19,9 +19,11 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db.connection import get_db_conn
 from app.main import app
 from app.repositories.jobs_repo import JobsRepo
 from app.repositories.videos_repo import VideosRepo
+from app.routers import jobs as jobs_mod
 
 
 # ---------------------------------------------------------------------------
@@ -54,38 +56,34 @@ def fake_runner() -> FakeRunner:
 @pytest.fixture()
 def client(db_conn: sqlite3.Connection, fake_runner: FakeRunner):
     """TestClient with in-memory DB and fake runner injected."""
-    import app.routers.jobs as jobs_mod
-
     def _override_conn() -> sqlite3.Connection:
         return db_conn
 
     def _override_runner() -> FakeRunner:
         return fake_runner
 
-    app.dependency_overrides[jobs_mod.get_db_conn] = _override_conn
+    app.dependency_overrides[get_db_conn] = _override_conn
     app.dependency_overrides[jobs_mod.get_runner] = _override_runner
 
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
 
-    app.dependency_overrides.pop(jobs_mod.get_db_conn, None)
+    app.dependency_overrides.pop(get_db_conn, None)
     app.dependency_overrides.pop(jobs_mod.get_runner, None)
 
 
 @pytest.fixture()
 def subtitles_client(db_conn: sqlite3.Connection):
     """TestClient for /api/subtitles/{video_id} with in-memory DB."""
-    import app.routers.subtitles as sub_mod
-
     def _override_conn() -> sqlite3.Connection:
         return db_conn
 
-    app.dependency_overrides[sub_mod.get_db_conn] = _override_conn
+    app.dependency_overrides[get_db_conn] = _override_conn
 
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
 
-    app.dependency_overrides.pop(sub_mod.get_db_conn, None)
+    app.dependency_overrides.pop(get_db_conn, None)
 
 
 # ---------------------------------------------------------------------------
@@ -165,28 +163,6 @@ def test_retry_after_failure_creates_new_job(
     assert data["job_id"] != failed_job_id
     assert data["status"] == "queued"
     assert len(fake_runner.submitted) == 1
-
-
-# ---------------------------------------------------------------------------
-# Tests: GET /api/subtitles/jobs/{job_id}
-# ---------------------------------------------------------------------------
-
-def test_get_job_status_unknown_id(client: TestClient):
-    resp = client.get(f"/api/subtitles/jobs/{uuid.uuid4()}")
-    assert resp.status_code == 404
-
-
-def test_get_job_status_returns_job(
-    client: TestClient, db_conn: sqlite3.Connection
-):
-    resp = client.post("/api/subtitles/jobs", json={"url": VALID_URL})
-    job_id = resp.json()["job_id"]
-
-    resp2 = client.get(f"/api/subtitles/jobs/{job_id}")
-    assert resp2.status_code == 200
-    data = resp2.json()
-    assert data["job_id"] == job_id
-    assert data["status"] == "queued"
 
 
 # ---------------------------------------------------------------------------
@@ -303,33 +279,3 @@ def test_valid_but_unknown_video_id_returns_404(subtitles_client: TestClient):
     assert data.get("error_code") == "NOT_FOUND"
 
 
-# ---------------------------------------------------------------------------
-# Tests: M1 — cache-hit synthetic job must be pollable via GET /jobs/{job_id}
-# ---------------------------------------------------------------------------
-
-def test_cache_hit_returns_pollable_job(
-    client: TestClient,
-    db_conn: sqlite3.Connection,
-    fake_runner: FakeRunner,
-):
-    """POST cache-hit → job_id → GET /jobs/{job_id} must return 200 status=completed."""
-    videos_repo = VideosRepo(db_conn)
-    videos_repo.upsert_video_clear_segments(
-        video_id=VIDEO_ID,
-        title="Rick Astley",
-        duration_sec=213.0,
-        source="whisper",
-    )
-
-    # Trigger cache-hit path
-    post_resp = client.post("/api/subtitles/jobs", json={"url": VALID_URL})
-    assert post_resp.status_code == 200
-    job_id = post_resp.json()["job_id"]
-
-    # Poll the returned job_id — must be persisted
-    get_resp = client.get(f"/api/subtitles/jobs/{job_id}")
-    assert get_resp.status_code == 200
-    data = get_resp.json()
-    assert data["job_id"] == job_id
-    assert data["status"] == "completed"
-    assert data["progress"] == 100
