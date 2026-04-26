@@ -26,21 +26,22 @@ class ErrorCode(str, Enum):
     NOT_FOUND = "NOT_FOUND"
 
 
-# Codes deliberately omitted (INVALID_URL, VIDEO_UNAVAILABLE, NOT_FOUND) fall
-# back to "內部錯誤" via `safe_message()` — matches Phase 1b behavior.
-SAFE_MESSAGES: dict[str, str] = {
-    ErrorCode.VIDEO_TOO_LONG.value:    "影片超過 20 分鐘上限",
-    ErrorCode.FFMPEG_MISSING.value:    "伺服器缺少 ffmpeg",
-    ErrorCode.DOWNLOAD_ERROR.value:    "無法下載影片",
-    ErrorCode.WHISPER_ERROR.value:     "字幕轉錄失敗，請稍後再試",
-    ErrorCode.TRANSLATION_ERROR.value: "翻譯失敗，請稍後再試",
-    ErrorCode.INTERNAL_ERROR.value:    "內部錯誤",
+# Codes deliberately omitted (INVALID_URL, VIDEO_UNAVAILABLE, NOT_FOUND)
+# fall back to "內部錯誤" via `safe_message()`.
+SAFE_MESSAGES: dict[ErrorCode, str] = {
+    ErrorCode.VIDEO_TOO_LONG:    "影片超過 20 分鐘上限",
+    ErrorCode.FFMPEG_MISSING:    "伺服器缺少 ffmpeg",
+    ErrorCode.DOWNLOAD_ERROR:    "無法下載影片",
+    ErrorCode.WHISPER_ERROR:     "字幕轉錄失敗，請稍後再試",
+    ErrorCode.TRANSLATION_ERROR: "翻譯失敗，請稍後再試",
+    ErrorCode.INTERNAL_ERROR:    "內部錯誤",
 }
 
 
-def safe_message(error_code: str) -> str:
+def safe_message(error_code: ErrorCode | str) -> str:
     """Return a sanitized user-facing message for `error_code`.
 
     Falls back to INTERNAL_ERROR's message if the code is unknown.
+    `ErrorCode(str, Enum)` makes string-keyed lookups equal-by-value.
     """
-    return SAFE_MESSAGES.get(error_code, SAFE_MESSAGES[ErrorCode.INTERNAL_ERROR.value])
+    return SAFE_MESSAGES.get(error_code, SAFE_MESSAGES[ErrorCode.INTERNAL_ERROR])

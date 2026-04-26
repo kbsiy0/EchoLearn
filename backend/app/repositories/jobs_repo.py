@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 from ..db._helpers import now_iso, validate_video_id
+from ..services.errors import ErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -142,13 +143,13 @@ class JobsRepo:
                 """
                 UPDATE jobs
                 SET status='failed',
-                    error_code='INTERNAL_ERROR',
+                    error_code=?,
                     error_message='server restarted during processing',
                     updated_at=?
                 WHERE status='processing' AND updated_at < ?
                 RETURNING job_id
                 """,
-                (now_iso(), cutoff_iso),
+                (ErrorCode.INTERNAL_ERROR, now_iso(), cutoff_iso),
             )
             rows = cursor.fetchall()
             self._conn.commit()

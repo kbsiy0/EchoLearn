@@ -40,7 +40,7 @@ Runner = Annotated[Any, Depends(get_runner)]
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _safe_error_message(raw: str) -> str:
+def _strip_traceback_tokens(raw: str) -> str:
     """Strip anything that looks like a Python stack trace or exception repr."""
     forbidden = ("Traceback", 'File "', "ValueError", "Exception", "Error(")
     for token in forbidden:
@@ -77,10 +77,10 @@ def create_job(body: CreateJobBody, conn: DbConn, runner: Runner):
             safe_msg = raw_msg[len("INVALID_URL:"):].strip()
         else:
             safe_msg = "Invalid YouTube URL"
-        safe_msg = _safe_error_message(safe_msg)
+        safe_msg = _strip_traceback_tokens(safe_msg)
         raise HTTPException(
             status_code=400,
-            detail={"error_code": ErrorCode.INVALID_URL.value, "error_message": safe_msg},
+            detail={"error_code": ErrorCode.INVALID_URL, "error_message": safe_msg},
         )
 
     jobs_repo = JobsRepo(conn)
