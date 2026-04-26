@@ -4,13 +4,7 @@ import { API_BASE } from '../api/base';
 import { createJob } from '../api/subtitles';
 import { extractVideoId } from '../lib/youtube';
 import { URLInput } from '../features/jobs/components/URLInput';
-
-interface VideoSummary {
-  video_id: string;
-  title: string;
-  duration_sec: number;
-  created_at: string;
-}
+import type { VideoSummary } from '../types/subtitle';
 
 export function HomePage() {
   const navigate = useNavigate();

@@ -670,7 +670,8 @@ class TestChunkDirCleanup:
             extract_chunk_fn=fake_extract_chunk,
         ).run(job_id)
 
-        expected_chunk_dir = Path("data/audio") / f"chunks_{VIDEO_ID}"
+        from app.services.transcription.youtube_audio import AUDIO_DIR
+        expected_chunk_dir = AUDIO_DIR / f"chunks_{VIDEO_ID}"
         assert all(p == expected_chunk_dir for p in chunk_dir_calls), (
             f"Expected chunk_dir={expected_chunk_dir}, got {chunk_dir_calls}"
         )
