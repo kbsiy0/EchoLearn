@@ -22,12 +22,12 @@ def get_subtitles(video_id: str, conn: DbConn) -> SubtitleResponse:
     except ValueError:
         raise HTTPException(
             status_code=404,
-            detail={"error_code": ErrorCode.NOT_FOUND.value, "error_message": "invalid video_id"},
+            detail={"error_code": ErrorCode.NOT_FOUND, "error_message": "invalid video_id"},
         )
     if view is None:
         raise HTTPException(
             status_code=404,
-            detail={"error_code": ErrorCode.NOT_FOUND.value, "error_message": "subtitle not found"},
+            detail={"error_code": ErrorCode.NOT_FOUND, "error_message": "subtitle not found"},
         )
 
     segments = [

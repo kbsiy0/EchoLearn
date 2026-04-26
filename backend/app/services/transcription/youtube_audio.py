@@ -33,9 +33,9 @@ class PipelineError(Exception):
     Subclasses may be raised by specific stages (WhisperError, TranslationError).
     """
 
-    def __init__(self, error_code: str, message: str) -> None:
+    def __init__(self, error_code: ErrorCode | str, message: str) -> None:
         super().__init__(message)
-        self.error_code = error_code
+        self.error_code: ErrorCode | str = error_code
         self.message = message
 
 
