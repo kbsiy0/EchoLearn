@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import type { SubtitleResponse } from '../types/subtitle';
 import { useSubtitleStream } from '../features/player/hooks/useSubtitleStream';
@@ -7,11 +7,10 @@ import { ProcessingPlaceholder } from '../features/player/components/ProcessingP
 import { SubtitlePanel } from '../features/player/components/SubtitlePanel';
 import { TitleBar } from '../features/player/components/TitleBar';
 import { CompletedLayout } from '../features/player/components/CompletedLayout';
-import { toSegments } from '../features/player/lib/toSegments';
 
 function ProcessingLayout({ data }: { data: SubtitleResponse }) {
-  const hasSegments = data.segments.length > 0;
-  const segments = useMemo(() => toSegments(data.segments), [data.segments]);
+  const segments = data.segments;
+  const hasSegments = segments.length > 0;
   const noop = useCallback(() => {}, []);
   const errorForPlaceholder =
     data.status === 'failed' ? (data.error_message ?? '處理失敗') : undefined;

@@ -1,21 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
-// -- Types (exported so tests and consumers can use the same shape) ----------
-
-export interface WordTiming {
-  text: string;
-  start: number;
-  end: number;
-}
-
-export interface Segment {
-  idx: number;
-  start: number;
-  end: number;
-  text_en: string;
-  text_zh: string;
-  words: WordTiming[];
-}
+import type { Segment, WordTiming } from '../../../types/subtitle';
+export type { Segment, WordTiming };
 
 // Debug stats written to window in DEV mode for ui-verifier p95 measurement.
 interface SyncTransition {
@@ -106,7 +92,7 @@ export function useSubtitleSync(
 
     const tick = () => {
       try {
-        // Guard: player may be non-null before onReady wires its methods (T09).
+        // Guard: player may be non-null before onReady wires its methods.
         if (typeof player.getCurrentTime !== 'function') {
           rafRef.current = requestAnimationFrame(tick);
           return;

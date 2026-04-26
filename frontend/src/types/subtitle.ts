@@ -4,7 +4,7 @@ export interface WordTiming {
   end: number;
 }
 
-export interface SubtitleSegment {
+export interface Segment {
   idx: number;
   start: number;
   end: number;
@@ -13,13 +13,20 @@ export interface SubtitleSegment {
   words: WordTiming[];
 }
 
+export interface VideoSummary {
+  video_id: string;
+  title: string;
+  duration_sec: number;
+  created_at: string;
+}
+
 export interface SubtitleResponse {
   video_id: string;
   status: 'queued' | 'processing' | 'completed' | 'failed';
   progress: number;
   title: string | null;
   duration_sec: number | null;
-  segments: SubtitleSegment[];
+  segments: Segment[];
   error_code: string | null;
   error_message: string | null;
 }

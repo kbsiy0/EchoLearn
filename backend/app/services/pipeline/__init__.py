@@ -21,6 +21,7 @@ from app.services.transcription.audio_chunking import (
     extract_chunk as _extract_chunk,
 )
 from app.services.transcription.youtube_audio import (
+    AUDIO_DIR,
     PipelineError,
     VideoMetadata as _VideoMetadata,
     download_audio as _download_audio,
@@ -102,7 +103,7 @@ class Pipeline:
             self._jobs.update_progress(job_id, 15)
 
             # Stage 4: per-chunk loop
-            chunk_dir = Path("data/audio") / f"chunks_{video_id}"
+            chunk_dir = AUDIO_DIR / f"chunks_{video_id}"
             chunk_dir.mkdir(parents=True, exist_ok=True)
             specs = compute_schedule(meta.duration_sec)
 

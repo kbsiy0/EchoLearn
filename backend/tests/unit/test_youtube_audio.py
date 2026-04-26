@@ -34,7 +34,7 @@ class TestDownloadAudioExtractorArgs:
         """--extractor-args must appear in the yt-dlp argv."""
         with (
             patch("app.services.transcription.youtube_audio.shutil.which", return_value="/usr/bin/yt-dlp"),
-            patch("app.services.transcription.youtube_audio._AUDIO_DIR", tmp_path),
+            patch("app.services.transcription.youtube_audio.AUDIO_DIR", tmp_path),
             patch("app.services.transcription.youtube_audio.subprocess.run") as mock_run,
         ):
             mock_run.return_value = _make_success_result(0)
@@ -47,7 +47,7 @@ class TestDownloadAudioExtractorArgs:
         """The value immediately after --extractor-args must be the SABR client list."""
         with (
             patch("app.services.transcription.youtube_audio.shutil.which", return_value="/usr/bin/yt-dlp"),
-            patch("app.services.transcription.youtube_audio._AUDIO_DIR", tmp_path),
+            patch("app.services.transcription.youtube_audio.AUDIO_DIR", tmp_path),
             patch("app.services.transcription.youtube_audio.subprocess.run") as mock_run,
         ):
             mock_run.return_value = _make_success_result(0)
@@ -63,7 +63,7 @@ class TestDownloadAudioExtractorArgs:
         """--extractor-args must appear before the URL in the argument list."""
         with (
             patch("app.services.transcription.youtube_audio.shutil.which", return_value="/usr/bin/yt-dlp"),
-            patch("app.services.transcription.youtube_audio._AUDIO_DIR", tmp_path),
+            patch("app.services.transcription.youtube_audio.AUDIO_DIR", tmp_path),
             patch("app.services.transcription.youtube_audio.subprocess.run") as mock_run,
         ):
             mock_run.return_value = _make_success_result(0)
@@ -80,7 +80,7 @@ class TestDownloadAudioExtractorArgs:
         """download_audio() should return the expected mp3 Path on success."""
         with (
             patch("app.services.transcription.youtube_audio.shutil.which", return_value="/usr/bin/yt-dlp"),
-            patch("app.services.transcription.youtube_audio._AUDIO_DIR", tmp_path),
+            patch("app.services.transcription.youtube_audio.AUDIO_DIR", tmp_path),
             patch("app.services.transcription.youtube_audio.subprocess.run") as mock_run,
         ):
             mock_run.return_value = _make_success_result(0)
@@ -92,7 +92,7 @@ class TestDownloadAudioExtractorArgs:
         """download_audio() should raise PipelineError(FFMPEG_MISSING) on yt-dlp failure."""
         with (
             patch("app.services.transcription.youtube_audio.shutil.which", return_value="/usr/bin/yt-dlp"),
-            patch("app.services.transcription.youtube_audio._AUDIO_DIR", tmp_path),
+            patch("app.services.transcription.youtube_audio.AUDIO_DIR", tmp_path),
             patch("app.services.transcription.youtube_audio.subprocess.run") as mock_run,
         ):
             mock_run.return_value = _make_success_result(1)

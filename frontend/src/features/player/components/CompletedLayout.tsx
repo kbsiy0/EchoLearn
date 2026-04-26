@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { SubtitleResponse } from '../../../types/subtitle';
 import { useYouTubePlayer } from '../hooks/useYouTubePlayer';
@@ -8,7 +8,6 @@ import { useLoopSegment } from '../hooks/useLoopSegment';
 import { usePlaybackRate } from '../hooks/usePlaybackRate';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { computePlaybackFlags } from '../lib/flags';
-import { toSegments } from '../lib/toSegments';
 import { VideoPlayer } from './VideoPlayer';
 import { SubtitlePanel } from './SubtitlePanel';
 import { PlayerControls } from './PlayerControls';
@@ -25,7 +24,7 @@ export function CompletedLayout({ data, videoId }: Props) {
   const [searchParams] = useSearchParams();
   const measure = searchParams.get('measure') === '1';
   const [loop, setLoop] = useState(false);
-  const segments = useMemo(() => toSegments(data.segments), [data.segments]);
+  const segments = data.segments;
 
   const { player, isReady, playerState, seekTo, playVideo, pauseVideo } =
     useYouTubePlayer(videoId, PLAYER_CONTAINER_ID);

@@ -23,7 +23,7 @@ from app.db._helpers import VIDEO_ID_RE
 from app.models.schemas import VideoMetadata
 from app.services.errors import ErrorCode
 
-_AUDIO_DIR = Path("data/audio")
+AUDIO_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data" / "audio"
 
 
 class PipelineError(Exception):
@@ -112,8 +112,8 @@ def download_audio(video_id: str) -> Path:
     if shutil.which("yt-dlp") is None:
         raise PipelineError(ErrorCode.FFMPEG_MISSING, "yt-dlp is not installed")
 
-    _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = _AUDIO_DIR / f"{video_id}.mp3"
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = AUDIO_DIR / f"{video_id}.mp3"
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     result = subprocess.run(
