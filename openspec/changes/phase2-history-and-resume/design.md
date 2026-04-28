@@ -935,6 +935,23 @@ distinguish (both NULL). Clause-3 sorts by `created_at` DESC: **X → Y**.
 This matches Phase 0/1b ordering for never-played videos — backward
 compatibility for the empty-progress case.
 
+### Equal-progress-`updated_at` tiebreak example
+
+| video_id | title    | created_at          | progress.updated_at |
+|----------|----------|---------------------|---------------------|
+| `ppp…`   | "Pi"     | 2026-04-25T11:00Z   | 2026-04-26T08:00Z   |
+| `qqq…`   | "Qubit"  | 2026-04-25T10:00Z   | 2026-04-26T08:00Z   |
+
+Both fall to the with-progress group (clause-1 false). Clause-2 cannot
+distinguish — `progress.updated_at` is byte-identical (e.g. two writes
+landed on the same second; or a manual SQLite edit set them equal).
+Clause-3 (`videos.created_at DESC`) breaks the tie: **Pi → Qubit**.
+
+This is the secondary tiebreaker pinned by `tasks.md` T05's
+`test_list_videos_uses_created_at_as_tiebreak_for_equal_progress_updated_at`.
+The 3-clause ORDER BY guarantees deterministic output even when the
+primary sort key collides.
+
 ---
 
 ## Section 13 — Edge cases & error handling
