@@ -1,8 +1,8 @@
 """Pydantic schemas for EchoLearn API."""
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WordTiming(BaseModel):
@@ -54,7 +54,7 @@ class VideoProgressIn(BaseModel):
     last_played_sec: float
     last_segment_idx: int
     playback_rate: float
-    loop_enabled: bool
+    loop_enabled: Annotated[bool, Field(strict=True)]
 
 
 class VideoSummary(BaseModel):
