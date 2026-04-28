@@ -534,10 +534,12 @@ is best-effort.
 Inert: no fetch, no listeners, `loaded=false`, `value=null`. `save()` and
 `reset()` are no-ops.
 
-### `videoId` change semantics
+### `videoId` is fixed for the hook's lifetime
 
-Triggers a fresh load; pending debounced save for the previous video is
-flushed first (best-effort), then the hook re-initializes.
+Route changes unmount `CompletedLayout` (and therefore the hook), which
+fires the unmount-flush. No live videoId-swap semantics are specified or
+tested — `useVideoProgress` is mounted with a single fixed `videoId` for
+its lifetime.
 
 ---
 
@@ -824,7 +826,7 @@ interface VideoCardProps {
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│ <button> (whole card click)                          │
+│ <div role="button" tabIndex={0}> (whole card click)  │
 │  ┌────────────────────────────────────────────────┐  │
 │  │  Video title (truncate)                        │  │
 │  │  3分27秒 · 4/25                                │  │
@@ -834,17 +836,23 @@ interface VideoCardProps {
 │  └────────────────────────────────────────────────┘  │
 │  (progress bar + reset button: only when progress)   │
 │  (inline red error text shown when reset failed)     │
-│ </button>                                            │
+│ </div>                                               │
 └──────────────────────────────────────────────────────┘
 ```
 
 ### Click vs reset event isolation
 
-The progress-bar + reset-button row is rendered as a `<div>` inside the
-outer `<button>`. The reset is its own `<button>` element with an `onClick`
-that calls `e.stopPropagation()` BEFORE invoking `onReset(videoId)`. Without
-`stopPropagation`, the click would bubble to the outer card button and
-navigate to `/watch/:id`, which is the opposite of the user's intent.
+The outer element is a **`<div role="button" tabIndex={0}>`** (NOT a
+`<button>` — HTML forbids nested `<button>` elements; browsers hoist or
+strip the inner). It has both `onClick` (which calls `onClick(videoId)`)
+and `onKeyDown` (Enter / Space → `onClick`) for keyboard parity with a
+native button.
+
+The reset is its own `<button type="button">` element nested inside the
+role-button div. Its `onClick` calls `e.stopPropagation()` BEFORE invoking
+`onReset(videoId)` — without `stopPropagation`, the click would bubble to
+the outer div and navigate to `/watch/:id`, which is the opposite of the
+user's intent.
 
 The reset button also has `type="button"` to prevent form-submit fallout if
 the card is ever wrapped in a form.
@@ -961,8 +969,11 @@ Two browser tabs on the same video both pause within milliseconds:
 - Each tab's hook fires PUT with its own merged state.
 - Backend processes the two PUTs serially (SQLite is single-writer in WAL
   mode).
-- Last-write-wins on `ON CONFLICT DO UPDATE`. The "winner" is determined by
-  arrival order, not by `updated_at` value (server stamps both with `now`).
+- Last-write-wins on `ON CONFLICT DO UPDATE`: SQLite WAL serializes the
+  two writes; the second writer overwrites the first. The row's final
+  `updated_at` is the second writer's `now_iso()`, so the history sort
+  in `list_videos` reflects the latest write — not the arrival order
+  of the requests.
 - The UI does not actively reconcile; the next page load reads whichever
   state stuck.
 
