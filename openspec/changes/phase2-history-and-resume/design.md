@@ -158,7 +158,7 @@ backend/tests/
 | `db/schema.sql` | Single source of truth for the `video_progress` table DDL and its index. Idempotent (`IF NOT EXISTS`). Loaded once per DB path on first connection per existing `db/connection.py` cache. |
 | `repositories/progress_repo.py` | All SQL touching the `video_progress` table. Owns row→model conversion (INTEGER ↔ bool, server-stamping `updated_at`). Validates `video_id` via shared `validate_video_id`, validates value ranges per Section 5. |
 | `repositories/videos_repo.py` | UNCHANGED methods stay; `list_videos()` is the only modified method. New SQL: `SELECT … FROM videos LEFT JOIN video_progress USING (video_id) ORDER BY (progress.updated_at IS NULL), progress.updated_at DESC, videos.created_at DESC`. Returns rows that downstream code converts to `VideoSummary` with optional `progress`. |
-| `routers/progress.py` | Three thin handlers calling `ProgressRepo`. GET 200/404, PUT 204, DELETE 204. Validation errors → 400 with `error_code="VALIDATION_ERROR"`. Errors flatten through the existing `http_exception_handler` in `main.py`. |
+| `routers/progress.py` | Three thin handlers calling `ProgressRepo`. GET 200/404, PUT 204, DELETE 204. Validation errors → 400 with `error_code=ErrorCode.VALIDATION_ERROR` (via router-local `RequestValidationError` handler — see §4). PUT references a non-existent videos row: attempt `repo.upsert(...)` directly, catch `sqlite3.IntegrityError` (FK violation), re-raise as `HTTPException(404, {error_code: ErrorCode.NOT_FOUND, error_message: "video not found"})`. **No SELECT-then-UPSERT pre-check** — the catch is race-free and simpler. Errors flatten through the existing `http_exception_handler` in `main.py`. |
 | `routers/videos.py` | Modified to read the LEFT-JOINed list and shape into `VideoSummary` (with nested `VideoProgress` when present). |
 | `models/schemas.py` | Adds `VideoProgress` (full) and `VideoProgressIn` (PUT body). Extends `VideoSummary` with optional `progress` field. |
 | `main.py` | One-line `app.include_router(progress_router.router)` addition. |
@@ -172,12 +172,37 @@ backend/tests/
 | Method | Path | Status | Body | Notes |
 |---|---|---|---|---|
 | GET | `/api/videos/{video_id}/progress` | 200 | `VideoProgress` | row exists; `last_played_sec` clamped to `videos.duration_sec` if greater |
-| GET | `/api/videos/{video_id}/progress` | 404 | `{ "error_code": "NOT_FOUND", "error_message": "progress not found" }` | no row for this video; or `video_id` regex-invalid |
+| GET | `/api/videos/{video_id}/progress` | 404 | `{ "error_code": "NOT_FOUND", "error_message": "progress not found" }` | no row for this video |
+| GET / DELETE | `/api/videos/{video_id}/progress` | 404 | `{ "error_code": "NOT_FOUND", "error_message": "invalid video_id" }` | `video_id` fails 11-char regex (matches `routers/subtitles.py:25` precedent) |
 | PUT | `/api/videos/{video_id}/progress` | 204 | empty | first-time create OR update; server stamps `updated_at` |
-| PUT | `/api/videos/{video_id}/progress` | 400 | `{ "error_code": "VALIDATION_ERROR", "error_message": "<reason>" }` | range/sign violations per Section 5 |
-| PUT | `/api/videos/{video_id}/progress` | 404 | `{ "error_code": "NOT_FOUND", "error_message": "video not found" }` | the referenced `videos` row does not exist (FK guard) |
+| PUT | `/api/videos/{video_id}/progress` | 400 | `{ "error_code": "VALIDATION_ERROR", "error_message": "<reason>" }` | range/sign violations per Section 5 (raised as `ValueError` in repo, mapped to `HTTPException(400, ...)` in router) |
+| PUT | `/api/videos/{video_id}/progress` | 400 | `{ "error_code": "VALIDATION_ERROR", "error_message": "<pydantic first-error>" }` | extra field, wrong type, missing field — handled by router-local `RequestValidationError` handler; see "Validation handler" row below |
+| PUT | `/api/videos/{video_id}/progress` | 404 | `{ "error_code": "NOT_FOUND", "error_message": "video not found" }` | `repo.upsert(...)` raises `sqlite3.IntegrityError` (FK violation); router catches and re-raises as 404. Race-free per §5. |
 | DELETE | `/api/videos/{video_id}/progress` | 204 | empty | idempotent; succeeds whether row existed or not |
 | GET | `/api/videos` | 200 | `VideoSummary[]` | each summary has `progress: VideoProgress \| null`; sorted per Section 12 |
+
+**Validation handler (router-local).** `routers/progress.py` registers a
+`@router.exception_handler(RequestValidationError)` that converts Pydantic
+v2's default 422 + `{detail: [...]}` shape into the canonical envelope:
+
+```python
+@router.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    first_error = exc.errors()[0]
+    msg = first_error.get("msg", "validation error")
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error_code": ErrorCode.VALIDATION_ERROR,
+            "error_message": msg,
+        },
+    )
+```
+
+This mirrors the pattern in `routers/subtitles.py:25` and
+`routers/jobs.py:83`. Clients NEVER observe a 422 from
+`/api/videos/{id}/progress`. The `app/main.py` `http_exception_handler`
+then flattens `detail=dict` into the canonical response envelope.
 
 **Why no PUT-time `updated_at` from the client**: the server is the timekeeper.
 Accepting client timestamps would expose the sort order to clock skew or
@@ -208,6 +233,12 @@ class ErrorCode(str, Enum):
 `SAFE_MESSAGES` does NOT add an entry for `VALIDATION_ERROR` because validation
 errors carry a specific, safe-to-expose reason string (e.g., `"playback_rate
 must be in [0.5, 2.0]"`). The router constructs this string per-violation.
+
+**Always reference the enum member, never the bare string.** Router and
+test code use `ErrorCode.VALIDATION_ERROR` and `ErrorCode.NOT_FOUND`,
+which JSON-serialize to `"VALIDATION_ERROR"` / `"NOT_FOUND"` because
+`ErrorCode` is a `str`-Enum. Inline string literals (`"VALIDATION_ERROR"`)
+are a code-review nit.
 
 ### `list_videos` LEFT JOIN
 
@@ -290,6 +321,48 @@ guards. The router's job is HTTP shape, not business rules.
 GET (so a stored value that is later "too large" because the video was
 re-transcribed shorter still produces a valid resume target). PUT-side
 clamping would silently rewrite client intent — confusing.
+
+### FK existence check via IntegrityError catch (race-free)
+
+`ProgressRepo.upsert()` does **not** pre-check that the videos row exists.
+Instead, the upsert SQL fires; if no `videos` row exists for the supplied
+`video_id`, SQLite's foreign-key enforcement raises
+`sqlite3.IntegrityError` from inside the INSERT statement. The router
+catches this exception and maps it to HTTP 404 with `error_code =
+ErrorCode.NOT_FOUND` and `error_message = "video not found"`.
+
+This is **race-free** without a `BEGIN DEFERRED` transaction: the FK check
+is part of the INSERT statement itself, so a videos row deleted between a
+hypothetical pre-check and the upsert cannot leak. The pattern eliminates
+the SELECT-then-UPSERT TOCTOU window entirely.
+
+```python
+# Repo
+def upsert(self, video_id: str, *, last_played_sec, ...) -> None:
+    validate_video_id(video_id)
+    _validate_progress_inputs(...)
+    self.conn.execute(
+        "INSERT INTO video_progress (...) VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(video_id) DO UPDATE SET ...",
+        (...),
+    )
+    # may raise sqlite3.IntegrityError if videos.video_id missing — bubbles up
+
+# Router
+try:
+    ProgressRepo(conn).upsert(video_id, **body.model_dump())
+except sqlite3.IntegrityError:
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error_code": ErrorCode.NOT_FOUND,
+            "error_message": "video not found",
+        },
+    )
+```
+
+`ProgressRepo.upsert` does NOT silently swallow `IntegrityError`; the
+exception propagates to the router for HTTP shaping.
 
 ### `videos_repo.list_videos()` modification
 
@@ -555,6 +628,38 @@ flushed first (best-effort), then the hook re-initializes.
   effect runs *exactly once* per CompletedLayout mount, even if `value`,
   `loaded`, or `isReady` change reactively. This is the same pattern used by
   the Phase 1b TTFS guard.
+
+### State-arrival orderings
+
+The resume effect's correctness depends on six "ready inputs" all being
+truthy: `progress.loaded`, `progress.value !== null` (or null with toast
+suppressed), `useYouTubePlayer.isReady`, `data.status === "completed"`,
+`segments[]` non-empty, and absence of an in-flight stream-reconnect.
+Because their arrival order is non-deterministic, the effect MUST behave
+identically across permutations.
+
+Six arrival orderings exercised by tests:
+
+1. `loaded` → `isReady` → `segments` → `value` (slow GET, fast IFrame)
+2. `isReady` → `value` → `loaded` → `segments` (slow stream)
+3. `value` → `loaded` → `isReady` → `segments` (cached progress, IFrame
+   slowest)
+4. `loaded` (with `value=null`) → `isReady` → `segments` (first-time view)
+5. cache-hit completed BEFORE `useVideoProgress` GET resolves — stream
+   first poll returns `status="completed"` synchronously; GET resolves
+   later with non-null progress
+6. stream-reconnect appends segments AFTER `restoredRef.current === true`
+   — recompute path would re-fire if not for `restoredRef` guard
+
+In all six, the effect runs at most once and `seekTo` is invoked exactly
+once.
+
+**The dep array MUST include `segments` so the recompute path runs against
+the latest segments reference.** `restoredRef` is the load-bearing guard
+against multi-fire when chunked streaming appends new segments mid-render.
+The combination is non-negotiable: removing `segments` from deps means
+recompute uses a stale closure; removing `restoredRef` means the effect
+re-fires on every segment append.
 
 ### Edge cases handled in this sequence
 

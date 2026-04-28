@@ -93,14 +93,13 @@ THEN no fetch is issued
 AND `loaded` stays `false`, `value` stays `null`
 AND `save(...)` and `reset()` calls are no-ops.
 
-### Hook: videoId change flushes old then loads new
+### Hook: videoId change is not exercised in production
 
-GIVEN the hook is mounted with `videoId="a..."` and a pending debounced
-save exists
-WHEN the parent re-renders with `videoId="b..."`
-THEN the pending PUT for `"a..."` fires immediately (best-effort flush)
-AND a fresh GET for `"b..."` fires
-AND `value` and `loaded` reset to reflect `"b..."`.
+The hook is mounted with a single fixed `videoId` for its lifetime.
+`videoId` prop change is NOT a production code path: `CompletedLayout` (the
+sole consumer in Phase 2) unmounts on route param change, which triggers
+the cleanup flush. No "live videoId swap" semantics are specified or
+tested.
 
 ### Hook: save debounces by 1 second
 
@@ -234,6 +233,63 @@ GIVEN the resume effect has already run (`restoredRef.current === true`)
 WHEN any subsequent re-render fires (e.g., transient `isReady=false →
 true`, value mutation, segment append)
 THEN the resume effect does NOT run again.
+
+### Resume: never indexes segments[] with raw stored idx
+
+GIVEN `value.last_segment_idx = 999999` (corrupted / huge value)
+AND `segments.length = 12`
+WHEN the resume effect runs
+THEN the seek target is `clamp(value.last_played_sec, 0, duration_sec)` —
+NEVER a value derived from `segments[999999]` (which would be `undefined`
+and crash on property access)
+AND the segment-idx recompute (binary search on `last_played_sec`) yields
+a valid idx for the toast label
+AND the component does NOT throw.
+
+### Resume: negative segment idx is treated as invalid
+
+GIVEN `value.last_segment_idx = -1` (defensive; should never reach the
+client because backend repo rejects it)
+WHEN the resume effect runs
+THEN the recompute path runs (treating the stored idx as out-of-range)
+AND the toast falls back to recomputed idx (or idx=0 + suppressed toast if
+recompute fails)
+AND `seekTo(value.last_played_sec)` is still called.
+
+### Resume: state-arrival orderings (6 permutations)
+
+The resume effect's correctness is independent of the order in which the
+six "ready inputs" arrive: `loaded`, `progress.value` (non-null),
+`isReady`, `data.status === "completed"`, `segments[]` (non-empty), and a
+transient stream-reconnect that appends new segments. The effect's
+`restoredRef.current` guard ensures the resume sequence runs **at most
+once** in every permutation; the dep array `[progress.loaded,
+progress.value, isReady, segments]` ensures the recompute path uses the
+latest `segments` reference.
+
+GIVEN any of the six arrival orderings (the most non-obvious cases below)
+WHEN the resume effect's effect runs through every render
+THEN `seekTo` is called exactly once (the call corresponding to the
+first render where `loaded && value && isReady` all hold).
+
+#### Resume: cache-hit completed before useVideoProgress GET resolves
+
+GIVEN `useSubtitleStream`'s first poll returns `status="completed"`
+synchronously
+AND `CompletedLayout` mounts
+AND `useYouTubePlayer.isReady` flips to `true` BEFORE
+`useVideoProgress`'s GET resolves
+WHEN the GET eventually resolves with non-null progress
+THEN the resume effect runs once (on the render after GET resolves)
+AND `seekTo(value.last_played_sec)` is called once.
+
+#### Resume: stream-reconnect appends segments after resume
+
+GIVEN the resume effect has already run (`restoredRef.current === true`)
+WHEN a stream reconnect appends new segments to `segments[]` (causing the
+dep array to fire)
+THEN the resume effect re-runs but is a no-op (guarded by `restoredRef`)
+AND `seekTo` is NOT called a second time.
 
 ### Resume: clamps last_played_sec to data.duration_sec
 
@@ -433,6 +489,19 @@ point per `design.md` §14).
    is initialized to `false` on every mount and set to `true` after the
    first effect that satisfies `(loaded && isReady)`. Subsequent effect
    runs are no-ops.
+
+   **INV-REF:** All `restoredRef.current = true` mutations occur inside
+   `useEffect` callbacks. The ref is NEVER written during render. (Per
+   project React 19 hook rules — `react-hooks/refs` lint rule.) The lint
+   rule failing constitutes a green-test regression.
+
+   **INV-OOB (out-of-bounds defense):** The seek target is always
+   `clamp(stored.last_played_sec, 0, duration_sec)`. `last_segment_idx`
+   is used **only** for the toast display label, and only after
+   validation OR recompute via binary search. The resume effect MUST NOT
+   index into `segments[]` using the raw stored `last_segment_idx` before
+   validation. Even a corrupted `last_segment_idx = 999999` is safe: the
+   seek uses `last_played_sec`; the toast uses the recomputed idx.
 2. **No toast for null progress.** The toast renders if and only if the
    resume effect actually applied stored values from a non-null
    `progress.value`.
@@ -467,6 +536,13 @@ point per `design.md` §14).
 11. **Player mount-once invariant preserved.** Phase 1b's "VideoPlayer
     mounts exactly once per page lifecycle" continues to hold; resume
     runs after mount and does not re-mount the player.
+12. **INV-LOOP-TRANSIENT.** The resume effect's `setLoop(stored)` call
+    schedules a re-render; `useLoopSegment` re-arms only after that
+    re-render. The transient (resume-effect-render → next-render) is
+    bounded by one React commit and is not user-visible because the
+    IFrame is not yet playing — `useYouTubePlayer.isReady=true` does not
+    imply `playerState === 1` (playing). The first user "play" click
+    happens after the loop state has settled.
 
 ## Non-goals (Phase 2)
 

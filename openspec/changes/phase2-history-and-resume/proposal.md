@@ -91,6 +91,7 @@ PUT    /api/videos/{video_id}/progress
   body  : VideoProgressIn (no updated_at — server stamps)
   204
   400 → { error_code: "VALIDATION_ERROR" }   when rate ∉ [0.5, 2.0] or sec < 0
+                                             (via custom RequestValidationError handler)
 
 DELETE /api/videos/{video_id}/progress
   204                                          idempotent

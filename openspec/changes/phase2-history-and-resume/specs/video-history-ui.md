@@ -185,6 +185,21 @@ GIVEN a card rendered inside any nested form context
 WHEN the reset button's HTML attributes are inspected
 THEN it has `type="button"` (defensive against accidental form submission).
 
+### VideoCard: outer element is `<div role="button">`, not `<button>`
+
+GIVEN a `VideoCard` rendered with progress (so the nested reset button is
+present)
+WHEN the rendered DOM is inspected
+THEN the outer click target is a `<div role="button" tabIndex={0}>` with
+`onClick` and `onKeyDown` handlers (Enter / Space activate)
+AND the outer element is NOT a `<button>` element.
+
+This is required because nesting a `<button>` inside a `<button>` is
+invalid HTML and breaks keyboard / a11y semantics. The `role="button"`
++ `tabIndex={0}` + `onKeyDown` combination satisfies WAI-ARIA's button
+pattern while permitting the nested `<button type="button">` for
+"重置進度".
+
 ### VideoCard: inline error on reset failure
 
 GIVEN a card whose `onReset` returns a rejected promise
@@ -249,6 +264,25 @@ AND the local `videos` state is unchanged
 AND the affected card surfaces the inline error
 AND other cards are untouched.
 
+### HomePage: DELETE succeeds but refetch fails (staleness, not failure)
+
+GIVEN HomePage with a card whose progress was just successfully reset
+(DELETE returned 204) AND the subsequent `GET /api/videos` fails (network
+or 5xx)
+WHEN the failed refetch resolves
+THEN the local `videos` state is unchanged (the card still shows the old
+progress bar locally, even though the server-side row is gone)
+AND no error is shown to the user (the user's reset DID succeed; this is
+staleness, not failure)
+AND a `console.warn` is emitted ("refetch after reset failed")
+AND the implementation MAY silently retry the refetch once after 1s; if
+the second refetch also fails, accept staleness until the next mount.
+
+The next time the user navigates back to HomePage, the fresh mount fetch
+will reconcile the list. This is acceptable per the proposal's
+"best-effort enrichment, never blocks the player" philosophy applied to
+the list.
+
 ### HomePage: list-fetch error is silent
 
 GIVEN the initial mount of HomePage
@@ -270,8 +304,11 @@ on mount).
 ## Invariants
 
 1. **Sort stability for with-progress group.** Within the with-progress
-   group, ordering is strictly determined by `progress.updated_at` DESC.
-   Newer activity is always above older activity.
+   group, ordering is strictly determined by `progress.updated_at` DESC,
+   with `videos.created_at` DESC as the secondary tiebreaker for equal
+   `updated_at` timestamps (e.g., two PUTs that landed within the same
+   server clock tick). Newer activity is always above older activity; if
+   activity ties, the more recently created video wins.
 2. **Sort stability for without-progress group.** Within the
    without-progress group, ordering is strictly determined by `created_at`
    DESC, matching Phase 0 / Phase 1b semantics.

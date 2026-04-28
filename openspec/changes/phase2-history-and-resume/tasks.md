@@ -67,6 +67,9 @@ are flagged inline.
   type='table' AND name='video_progress'` returns one row.
 - `test_video_progress_index_exists_after_boot` — assert
   `idx_progress_updated_at` exists.
+- `test_idx_progress_updated_at_is_desc` — `PRAGMA index_xinfo('idx_progress_updated_at')`
+  shows `desc=1` for the `updated_at` column. The DDL declares `DESC`; the
+  test pins the direction so a future ALTER doesn't silently flip it.
 - `test_video_progress_columns_match_schema` — assert column names + types
   match the DDL in `design.md` §2 (`PRAGMA table_info(video_progress)`).
 - `test_video_progress_fk_cascades_on_video_delete` — insert a videos row +
@@ -199,13 +202,11 @@ private `_validate_progress_inputs(...)` helper.
 
 - `test_video_progress_round_trip` — construct with all fields; JSON dump +
   parse round-trips equal.
-- `test_video_progress_in_rejects_updated_at_field` — JSON `{
-  last_played_sec: 0, last_segment_idx: 0, playback_rate: 1.0, loop_enabled:
-  false, updated_at: "2026-04-25T..."}` parses successfully but the
-  `updated_at` field is silently DROPPED (Pydantic v2 default `extra="ignore"`)
-  OR raises if we configure `extra="forbid"`. **Decision: configure
-  `model_config = ConfigDict(extra="forbid")` on `VideoProgressIn`** so a
-  client cannot set `updated_at` even by accident; assert ValidationError.
+- `test_video_progress_in_rejects_updated_at_field` — `VideoProgressIn` is
+  configured `model_config = ConfigDict(extra="forbid")`; constructing with
+  `updated_at: "2026-04-25T..."` in the dict raises `ValidationError`. (T04's
+  `RequestValidationError` handler converts that to HTTP 400 + the canonical
+  `error_code/error_message` envelope at the API surface.)
 - `test_video_progress_in_loop_enabled_must_be_bool` — `loop_enabled="yes"`
   raises ValidationError.
 - `test_video_summary_progress_defaults_to_none` — construct
@@ -259,7 +260,9 @@ private `_validate_progress_inputs(...)` helper.
   `GET /api/videos/{id}/progress` → 404 with body `{error_code:"NOT_FOUND",
   error_message:"progress not found"}`.
 - `test_get_404_when_video_id_regex_invalid` — `GET
-  /api/videos/abc/progress` (3 chars) → 404 with `error_code="NOT_FOUND"`.
+  /api/videos/abc/progress` (3 chars) → 404 with `error_code="NOT_FOUND"`,
+  `error_message="invalid video_id"` (matches `routers/subtitles.py:25`
+  precedent — the 404 is about the id format, not the row).
 - `test_get_200_returns_progress_shape` — fixture: videos + progress row;
   GET returns 200 with all fields including `updated_at`.
 - `test_get_clamps_last_played_sec_when_greater_than_duration` — fixture:
@@ -279,17 +282,23 @@ private `_validate_progress_inputs(...)` helper.
   `"last_played_sec"` in message.
 - `test_put_400_when_last_segment_idx_negative` — 400.
 - `test_put_400_when_loop_enabled_not_bool` — body `loop_enabled="yes"` →
-  Pydantic ValidationError → 422 (FastAPI default for body parse). Verify
-  the body shape; it is acceptable that this case is 422 not 400, document
-  in the test.
+  the router's `RequestValidationError` handler converts Pydantic's default
+  422 into HTTP 400 + canonical envelope `{error_code:"VALIDATION_ERROR",
+  error_message:<pydantic first-error msg mentioning loop_enabled>}`.
 - `test_put_400_when_extra_field_in_body` — body includes `updated_at`
-  (forbidden) → 422 (Pydantic) or 400 (depending on configuration). Match
-  whatever `extra="forbid"` produces.
+  (forbidden by `extra="forbid"`) → HTTP 400 + canonical envelope (NOT 422 —
+  the router-local handler converts).
+- `test_put_400_validation_envelope_post_flatten_shape` — pin the post-flatten
+  body: `{"error_code":"VALIDATION_ERROR", "error_message":"..."}` (after
+  `main.py`'s `http_exception_handler` flattens the `detail` dict).
 - `test_put_404_when_video_id_does_not_exist_in_videos` — `PUT
   /api/videos/{NEVER_SEEN_ID}/progress` with valid body → 404 with
   `error_code="NOT_FOUND"`, `error_message="video not found"`. The router
-  checks the videos row before upsert and rejects if missing.
-- `test_put_404_when_video_id_regex_invalid` — 3-char id → 404.
+  uses FK enforcement: attempts upsert, catches `sqlite3.IntegrityError`,
+  re-raises as 404. **No** SELECT-then-UPSERT pre-check (race-free via
+  FK; matches design.md §5).
+- `test_put_404_when_video_id_regex_invalid` — 3-char id → 404 with
+  `error_message="invalid video_id"`.
 - `test_put_two_back_to_back_last_write_wins` — PUT A; PUT B (different
   values); GET → returns B's values; `updated_at` is the second PUT's
   stamp.
@@ -297,7 +306,8 @@ private `_validate_progress_inputs(...)` helper.
   → 404.
 - `test_delete_204_when_no_row_exists` — empty table; DELETE → 204
   (idempotent); no error.
-- `test_delete_404_when_video_id_regex_invalid` — 3-char id → 404.
+- `test_delete_404_when_video_id_regex_invalid` — 3-char id → 404 with
+  `error_message="invalid video_id"`.
 - `test_delete_does_not_affect_videos_row` — pre-seed videos + progress;
   DELETE progress; videos row still exists.
 - `test_delete_does_not_affect_other_videos_progress` — two videos, both
@@ -308,15 +318,33 @@ private `_validate_progress_inputs(...)` helper.
 - `backend/app/routers/progress.py` (NEW). Target ≤ 120 LOC.
   - Three handlers: `GET /{video_id}/progress`, `PUT /{video_id}/progress`,
     `DELETE /{video_id}/progress`.
-  - GET: call `ProgressRepo.get`; on `None` raise `HTTPException(404, ...)`;
-    on dict, construct `VideoProgress(**row)` and return.
-  - PUT: parse `VideoProgressIn`; check the videos row exists via
-    `VideosRepo(conn).get_video(video_id)`; if missing, raise 404 with
-    `"video not found"`; else call `ProgressRepo.upsert(...)`; on
-    `ValueError`, raise `HTTPException(400, {error_code:"VALIDATION_ERROR",
-    error_message: <reason>})`.
+  - **Router-local `RequestValidationError` handler** registered via
+    `@router.exception_handler(RequestValidationError)` (or APIRouter's
+    `dependencies` pattern) — converts Pydantic's default 422 into HTTP
+    400 + `{detail: {error_code: ErrorCode.VALIDATION_ERROR,
+    error_message: <pydantic first-error msg>}}`. Mirrors the existing
+    `routers/subtitles.py:25` and `routers/jobs.py:83` pattern.
+  - GET: validate via `validate_video_id` (catch `ValueError` → 404 with
+    `error_message="invalid video_id"`); call `ProgressRepo.get`; on `None`
+    raise `HTTPException(404, {error_code: ErrorCode.NOT_FOUND,
+    error_message: "progress not found"})`; on dict, construct
+    `VideoProgress(**row)` and return.
+  - PUT: parse `VideoProgressIn` (custom handler converts validation errors);
+    call `ProgressRepo.upsert(...)` directly; **catch
+    `sqlite3.IntegrityError`** (FK violation when videos row is absent) →
+    raise `HTTPException(404, {error_code: ErrorCode.NOT_FOUND,
+    error_message: "video not found"})`. **No SELECT-before-UPSERT
+    pre-check** — FK enforcement is race-free. On `ValueError` from repo
+    range/sign checks, raise `HTTPException(400, {error_code:
+    ErrorCode.VALIDATION_ERROR, error_message: <reason>})`.
   - DELETE: validate via `validate_video_id` (catch `ValueError` → 404
-    `NOT_FOUND`); else call `ProgressRepo.delete`; return 204.
+    with `error_message="invalid video_id"`); call `ProgressRepo.delete`;
+    return 204.
+  - **Use `ErrorCode` enum literals** (e.g. `ErrorCode.VALIDATION_ERROR`,
+    `ErrorCode.NOT_FOUND`) — `class ErrorCode(str, Enum)` JSON-serializes
+    to the string value, so the wire shape is unchanged. Bare strings are
+    a regression vs the project's centralized error taxonomy
+    (`services/errors.py`).
   - All error responses use the `detail=dict` shape that flattens via
     `main.py`'s `http_exception_handler`.
 - `backend/app/main.py` (MODIFIED): add `from app.routers import progress as
@@ -367,6 +395,11 @@ regex failure.
 - `test_list_videos_three_video_mixed_state_example` — exact example from
   `design.md` §12 (Beta with newer progress, Gamma with older progress,
   Alpha never played); assert order is **Beta → Gamma → Alpha**.
+- `test_list_videos_uses_created_at_as_tiebreak_for_equal_progress_updated_at`
+  — set two `video_progress` rows to identical `updated_at` strings (manual
+  fixture insertion bypassing `now_iso()`), with distinct `videos.created_at`;
+  assert ordering within the equal-timestamp group is by `videos.created_at
+  DESC`. Pins the secondary tiebreaker SQL clause.
 - `test_list_videos_loop_enabled_serialized_as_bool_in_nested_progress` —
   insert progress with `loop_enabled=1`; response's nested
   `progress.loop_enabled` is JSON `true` (not `1`).
@@ -431,9 +464,11 @@ progress conditional, leave it as-is; do not split.
   throws.
 - `test_put_progress_resolves_on_204` — mock PUT 204; `putProgress("abc...",
   {...})` resolves (no return value).
-- `test_put_progress_throws_on_400` — mock PUT 400 with
-  `{error_code:"VALIDATION_ERROR", error_message:"..."}`; throws an Error
-  whose message includes `"VALIDATION_ERROR"`.
+- `test_put_progress_throws_on_400` — mock PUT 400 with **post-flatten**
+  body `{error_code:"VALIDATION_ERROR", error_message:"..."}` (the router's
+  `RequestValidationError` handler emits this shape, which `main.py`
+  flattens from `{detail: {...}}`); throws an Error whose message includes
+  the parsed `error_message` plus the literal `"VALIDATION_ERROR"`.
 - `test_put_progress_throws_on_404` — mock PUT 404 (video not found);
   throws.
 - `test_put_progress_sends_correct_body_shape` — assert the request body
@@ -456,9 +491,14 @@ progress conditional, leave it as-is; do not split.
   //   getProgress(videoId): Promise<VideoProgress | null>
   //   putProgress(videoId, body): Promise<void>
   //   deleteProgress(videoId): Promise<void>
-  // Reuses API_BASE from './base'.
+  //
+  // URL pattern (all three):
+  //   `${API_BASE}/videos/${videoId}/progress`
+  //   (API_BASE from './base'; e.g. http://localhost:8000/api)
+  //
   // 404 is normal-path for getProgress (return null); for put/delete it
-  // surfaces as a thrown Error.
+  // surfaces as a thrown Error whose message includes the parsed
+  // error_message + error_code from the post-flatten 400/404 envelope.
   ```
 
 - `frontend/src/types/subtitle.ts` (MODIFIED): add `VideoProgress` interface
@@ -538,9 +578,14 @@ progress conditional, leave it as-is; do not split.
 - `test_reset_clears_pending_debounced_save` — schedule a save; call
   `reset()` (which DELETEs); after reset resolves, advance past 1s; the
   pending PUT must NOT fire.
-- `test_videoId_change_flushes_old_progress_then_loads_new` — render with
-  `"a..."`, call `save(...)`; change prop to `"b..."`; assert old PUT fires
-  for `"a..."` (best-effort flush), then GET fires for `"b..."`.
+<!-- Dead-path test removed per gate-(1) M5: `videoId` prop change is not
+exercised in production. `CompletedLayout` unmounts on route param change,
+which triggers the cleanup-flush already covered by
+`test_unmount_flushes_pending_save`. The hook is mounted with a single
+fixed `videoId` for its lifetime; testing prop-change is testing a
+production-impossible code path. -->
+
+
 
 **Green implementation:**
 
@@ -689,15 +734,24 @@ to `flushNow`; if the wiring exceeds ~25 LOC, extract.
   error visible; second click resolves; error gone.
 - `test_renders_created_at_in_zh_tw_locale` — `created_at="2026-04-25T..."`;
   rendered date includes the locale-formatted day.
+- `test_card_uses_div_role_button_to_allow_nested_button` — assert outer
+  element is `<div role="button" tabIndex={0}>` (NOT `<button>`); rationale:
+  HTML forbids nested `<button>` (browsers hoist or strip the inner). The
+  reset element is `<button type="button">`, so the outer must be a
+  role-button div to keep the markup valid.
+- `test_outer_div_responds_to_keyboard_enter_and_space` — the role-button
+  div has `onKeyDown` that fires `onClick(video_id)` on Enter or Space
+  (a11y parity with native `<button>`).
 
 **Green implementation:**
 
 - `frontend/src/features/jobs/components/VideoCard.tsx` (NEW). Target ≤ 120
   LOC.
-- Outer element: `<button onClick={() => onClick(summary.video_id)}>` (or a
-  `<div role="button">` if accessibility is preferred — implementer's
-  call). Same Tailwind classes as the existing inline `<button>` in
-  `HomePage.tsx` for visual continuity.
+- Outer element: **`<div role="button" tabIndex={0}>`** with `onClick`
+  AND `onKeyDown` (Enter / Space → onClick). NOT `<button>` — the spec
+  needs a nested `<button type="button">` for reset, and HTML forbids
+  nested `<button>` (browsers hoist or strip). Same Tailwind classes as
+  the existing inline `<button>` in `HomePage.tsx` for visual continuity.
 - Reset button: nested `<button type="button" onClick={(e) => {
   e.stopPropagation(); onReset(summary.video_id).catch(() => setError("...")); }}>`.
 
@@ -747,6 +801,13 @@ extend existing):**
 - `test_reset_failure_other_cards_unaffected` — three cards; reset on
   card 1 fails; card 2 and card 3 do not show errors and are still
   clickable.
+- `test_reset_success_then_refetch_fails_keeps_local_state` — DELETE 204
+  succeeds; mock fetch to fail on the next `GET /api/videos` (5xx); assert
+  the local list state is **unchanged** (cards keep showing old progress
+  bar — staleness, not failure), no error UI is shown to user (the user's
+  reset DID succeed at the API level), and `console.warn` is fired.
+  Recommendation: silently retry the refetch once after 1s; if second
+  refetch also fails, accept staleness until next mount.
 - `test_empty_state_when_videos_array_is_empty` — list endpoint returns
   `[]`; assert empty-state copy `"貼上 YouTube URL 開始學習"`.
 - `test_loading_state_during_initial_fetch` — slow `/api/videos` mock; assert
@@ -826,6 +887,30 @@ it exercises CompletedLayout):**
 - `test_resume_recompute_segment_falls_back_to_zero_if_no_segment_matches`
   — `last_played_sec=-5` (defensive); recomputes to `idx=0`; toast does
   NOT show (per `design.md` §13).
+- `test_resume_does_not_index_segments_with_unvalidated_idx` — mock
+  `useVideoProgress` returning `last_segment_idx=999999` AND
+  `segments.length=12`. Assert: render does NOT throw, **no
+  out-of-bounds access** of `segments[999999]`. The `seekTo` argument
+  must derive from `clamp(last_played_sec, 0, duration_sec)`, NOT from
+  `segments[999999].start`. Pins INV-OOB from
+  `specs/player-resume.md`.
+- `test_resume_negative_segment_idx_is_treated_as_invalid` — defensive:
+  `last_segment_idx=-1` (DB corruption / manual edit). Resume effect
+  recomputes via binary search on `last_played_sec`; never indexes
+  `segments[-1]`. Toast shows the recomputed idx (or is suppressed if
+  recompute fails, per the fall-back rule).
+- `test_resume_does_not_re_fire_when_segments_grow_after_resume` —
+  scripted: hook returns `{loaded:true, value:<obj>}`; isReady=true;
+  initial render with `segments=[s0..s5]` (6 segs) → resume runs once,
+  `seekTo` called once. Then `segments` grows to `[s0..s9]` (10 segs,
+  simulating Phase 1b chunk-streaming append). Assert `seekTo` is still
+  called only once (the `restoredRef.current` guard suppresses re-fire
+  when segments grow). Pins M6 dep-array safety.
+- `test_restored_ref_mutated_only_in_useEffect_not_render` — defensive
+  static check: `ESLint react-hooks/refs` rule passes after T11 lands;
+  no ref reads or writes during render. Run `npm run lint` as part of
+  this task's verification (`tasks.md` integrator gate already runs lint
+  but call it out here).
 - `test_toast_does_not_show_when_progress_is_null`.
 - `test_toast_dismiss_clears_state` — click ✕; toast unmounts; player
   unaffected.

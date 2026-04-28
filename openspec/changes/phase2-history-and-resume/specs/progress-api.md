@@ -101,7 +101,7 @@ SELECT shows `200.0`).
 GIVEN any state
 WHEN the client calls `GET /api/videos/abc/progress` (3-character video_id, fails the 11-character regex)
 THEN the response is `HTTP 404`
-AND the body is `{"error_code": "NOT_FOUND", "error_message": "progress not found"}`.
+AND the body is `{"error_code": "NOT_FOUND", "error_message": "invalid video_id"}`.
 
 ### Endpoint: PUT — first-time create
 
@@ -125,13 +125,42 @@ AND the row's values are now B
 AND the row's `updated_at` advances to `T2 >= T1` (monotone non-decreasing,
 server-stamped).
 
-### Endpoint: PUT — server stamps updated_at, ignores client field
+### PUT validation envelope shape
+
+All PUT validation failures (extra-field, wrong-type, range / sign violations)
+return the canonical structured envelope below — **not** FastAPI's default
+422 + `{detail: [...]}` shape:
+
+```
+HTTP 400
+Content-Type: application/json
+
+{
+  "detail": {
+    "error_code": "VALIDATION_ERROR",
+    "error_message": "<pydantic first-error message OR repo ValueError reason>"
+  }
+}
+```
+
+The router registers a local `RequestValidationError` handler (mirroring
+`routers/subtitles.py:25` and `routers/jobs.py:83`) that converts Pydantic's
+default 422 into this 400 envelope. Repo-level `ValueError`s (range / sign
+checks) raise `HTTPException(400, detail=...)` directly. Either path
+flattens through `app/main.py`'s `http_exception_handler` to the canonical
+shape.
+
+### Endpoint: PUT — extra field in body
 
 GIVEN a `videos` row exists for V
 WHEN the client calls PUT with a body that includes `updated_at:
 "1970-01-01T00:00:00Z"` in addition to the four required fields
-THEN the response is `HTTP 422` (Pydantic ValidationError) because
-`VideoProgressIn` has `extra="forbid"`
+THEN the response is `HTTP 400` (NOT 422 — converted by the router-local
+`RequestValidationError` handler)
+AND the body matches the envelope shape above with
+`error_code="VALIDATION_ERROR"`
+AND `error_message` mentions the disallowed field (Pydantic v2's first-error
+message for `extra="forbid"`)
 AND no `video_progress` row is created.
 
 ### Endpoint: PUT — playback_rate below lower bound
@@ -139,7 +168,9 @@ AND no `video_progress` row is created.
 GIVEN a `videos` row exists for V
 WHEN the client calls PUT with `playback_rate=0.4` and otherwise-valid fields
 THEN the response is `HTTP 400`
-AND the body is `{"error_code": "VALIDATION_ERROR", "error_message": "<reason mentioning playback_rate>"}`
+AND the body is `{"detail": {"error_code": "VALIDATION_ERROR",
+"error_message": "<reason mentioning playback_rate>"}}` (post-flatten:
+`{"error_code": "VALIDATION_ERROR", "error_message": "..."}`)
 AND no row is created or modified.
 
 ### Endpoint: PUT — playback_rate above upper bound
@@ -173,27 +204,42 @@ WHEN the client calls PUT with `last_segment_idx=-1`
 THEN the response is `HTTP 400` with `error_code="VALIDATION_ERROR"` and a
 message mentioning `last_segment_idx`.
 
-### Endpoint: PUT — loop_enabled wrong type
+### Endpoint: PUT — wrong type (e.g., loop_enabled="yes")
 
 GIVEN a `videos` row exists for V
 WHEN the client calls PUT with `loop_enabled="yes"` (string, not boolean)
-THEN the response is `HTTP 422` (FastAPI default for body parse failure)
+THEN the response is `HTTP 400` with `error_code="VALIDATION_ERROR"` and a
+message mentioning the bad field (Pydantic first-error converted by the
+router-local handler)
 AND no row is created or modified.
 
-### Endpoint: PUT — referenced videos row does not exist
+### Endpoint: PUT — referenced videos row does not exist (FK violation caught)
 
-GIVEN no `videos` row exists for V
+GIVEN no `videos` row exists for V (regex-valid 11-char id)
 WHEN the client calls `PUT /api/videos/V/progress` with a valid body
-THEN the response is `HTTP 404`
-AND the body is `{"error_code": "NOT_FOUND", "error_message": "video not found"}`
-AND no `video_progress` row is created.
+THEN the implementation calls `repo.upsert(...)` directly without a
+pre-check; SQLite raises `sqlite3.IntegrityError` because of the FOREIGN KEY
+constraint on `video_progress.video_id`
+AND the router catches the IntegrityError and re-raises
+`HTTPException(404, {error_code: "NOT_FOUND", error_message: "video not
+found"})`
+AND the response body is `{"detail": {"error_code": "NOT_FOUND",
+"error_message": "video not found"}}` (post-flatten: `{"error_code":
+"NOT_FOUND", "error_message": "video not found"}`)
+AND no `video_progress` row is created (the failed INSERT is rolled back by
+SQLite).
+
+This pattern is **race-free** — SQLite's FK enforcement runs inside the
+INSERT statement, so a videos row deleted between a hypothetical pre-check
+and the upsert cannot leak. No `BEGIN DEFERRED` transaction needed for the
+existence check.
 
 ### Endpoint: PUT — invalid video_id regex
 
 GIVEN any state
 WHEN the client calls `PUT /api/videos/abc/progress` (3-character video_id)
 THEN the response is `HTTP 404`
-AND the body is `{"error_code": "NOT_FOUND", "error_message": "video not found"}`.
+AND the body is `{"error_code": "NOT_FOUND", "error_message": "invalid video_id"}`.
 
 ### Endpoint: PUT — concurrency last-write-wins
 
@@ -225,7 +271,7 @@ AND the table state is unchanged.
 GIVEN any state
 WHEN the client calls `DELETE /api/videos/abc/progress` (3-character video_id)
 THEN the response is `HTTP 404`
-AND the body is `{"error_code": "NOT_FOUND", "error_message": "progress not found"}`.
+AND the body is `{"error_code": "NOT_FOUND", "error_message": "invalid video_id"}`.
 
 ### Endpoint: DELETE — does not affect other rows
 
@@ -354,27 +400,50 @@ EXPLAIN QUERY PLAN in a smoke test, optional).
    `videos.duration_sec` if greater. `PUT` does not clamp; clients submit
    raw values. Re-storing on every read would silently rewrite client
    intent.
-3. **404 distinguishes "video missing" from "progress missing".**
-   - `GET 404` body: `error_message="progress not found"` (no progress row).
-   - `PUT 404` body: `error_message="video not found"` (no videos row).
+3. **404 distinguishes three "not found" reasons by `error_message`.**
+   - `GET 404` (no progress row): `error_message="progress not found"`.
+   - `PUT 404` (no videos row, FK violation): `error_message="video not found"`.
+   - GET / PUT / DELETE 404 (regex-invalid `video_id`):
+     `error_message="invalid video_id"` (matches `routers/subtitles.py:25`
+     precedent).
 4. **DELETE is idempotent.** Multiple DELETEs return 204; never 404 for a
    "missing" row (404 only when the `video_id` itself is regex-invalid).
 5. **Last-write-wins on concurrent PUTs.** SQLite WAL serializes writers;
    the `ON CONFLICT(video_id) DO UPDATE` makes the second writer overwrite
-   the first.
-6. **`extra="forbid"` on `VideoProgressIn`.** Unknown fields (including
-   `updated_at`) cause Pydantic to reject the body with HTTP 422.
+   the first. The row's final `updated_at` is the second writer's
+   `now_iso()`; sort order in `list_videos` reflects that final value.
+6. **Validation errors return HTTP 400 + structured envelope.** Both extra
+   fields (Pydantic `extra="forbid"`) and FastAPI body-parse failures
+   (wrong type, missing field) are intercepted by a router-local
+   `RequestValidationError` handler that converts the default 422 into
+   HTTP 400 with `{"detail": {"error_code": "VALIDATION_ERROR",
+   "error_message": <pydantic first-error message>}}`. Repo-level
+   `ValueError`s (range / sign checks) raise `HTTPException(400, ...)`
+   directly with the same envelope. Clients NEVER observe FastAPI's
+   default 422 + `{detail: [...]}` shape on this endpoint.
 7. **Validation ranges enforced at the repository.** `playback_rate ∈
    [0.5, 2.0]`, `last_played_sec >= 0`, `last_segment_idx >= 0`, all raise
    `ValueError` from `ProgressRepo.upsert`. The router maps `ValueError` to
    HTTP 400 with `error_code="VALIDATION_ERROR"`.
+
+   **`last_played_sec` upper bound is NOT enforced at PUT.** The read-side
+   `min(stored, duration_sec)` clamp at `ProgressRepo.get()` is the
+   load-bearing defense against re-transcribe shrinkage. Any future code
+   path that consumes `last_played_sec` directly from the table (bypassing
+   `repo.get`) MUST clamp at the consumer.
 8. **`loop_enabled` storage is INTEGER, exposure is bool.** The repo
    converts `bool ↔ INTEGER` at the boundary; outer interfaces use only
    `bool`.
 9. **FK CASCADE is schema-asserted, not API-driven.** Phase 2's API never
    deletes `videos` rows, so the CASCADE is dormant. It is asserted by
    schema-level smoke tests but not by an API scenario.
-10. **No middleware mutation.** Authentication, rate limiting, and global
+10. **PUT 404 is detected via FK IntegrityError catch, not a pre-check.**
+    The router calls `repo.upsert(...)` directly and catches
+    `sqlite3.IntegrityError`; the FK enforcement on `video_progress
+    .video_id` is the existence check. This is race-free (no SELECT-then-
+    UPSERT TOCTOU) and requires no transaction wrapping for the existence
+    check.
+11. **No middleware mutation.** Authentication, rate limiting, and global
     request rewriting are out of scope; the endpoints accept any
     CORS-allowed origin (localhost) without further checks.
 
