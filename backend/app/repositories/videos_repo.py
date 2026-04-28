@@ -125,12 +125,33 @@ class VideosRepo:
         )
         return cursor.fetchone()
 
-    def list_videos(self) -> list:
-        """Return all videos ordered by created_at DESC."""
+    def list_videos(self) -> list[dict]:
+        """Return all videos with optional progress, sorted per design.md §12.
+
+        Uses a LEFT JOIN so videos with no progress row still appear.
+        Three-clause ORDER BY:
+          1. (p.updated_at IS NULL) ASC  → has-progress group (0) before no-progress group (1)
+          2. p.updated_at DESC           → most-recently-played first within has-progress group
+          3. v.created_at DESC           → newest-created first within no-progress group
+                                           (also serves as tiebreaker for equal updated_at)
+
+        Returns list[dict] — each dict carries both videos columns and the
+        joined progress columns (prefixed; None when no progress row exists).
+        The router is responsible for shaping into Pydantic models.
+        """
         cursor = self._conn.execute(
-            "SELECT * FROM videos ORDER BY created_at DESC"
+            """
+            SELECT v.video_id, v.title, v.duration_sec, v.source, v.created_at,
+                   p.last_played_sec, p.last_segment_idx, p.playback_rate,
+                   p.loop_enabled, p.updated_at AS progress_updated_at
+            FROM videos v
+            LEFT JOIN video_progress p USING (video_id)
+            ORDER BY (p.updated_at IS NULL) ASC,
+                     p.updated_at DESC,
+                     v.created_at DESC
+            """
         )
-        return cursor.fetchall()
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_segments(self, video_id: str) -> list:
         """Return segments for video_id ordered by idx ASC."""
