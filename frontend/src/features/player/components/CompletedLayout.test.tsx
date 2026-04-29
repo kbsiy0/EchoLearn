@@ -335,13 +335,16 @@ describe('CompletedLayout — T11 integration', () => {
   });
 
   it('test_resume_clamps_playback_rate_above_2_0', () => {
+    // Spec design.md §13 says clamp to [0.5, 2.0], but the player's
+    // ALLOWED_RATES caps at 1.5 (Phase 1a constraint). CompletedLayout's
+    // setRateFromResume snaps the clamped 2.0 to the nearest allowed rate.
     setupDefaultMocks({
       isReady: true,
       progressLoaded: true,
       progressValue: { last_played_sec: 30, last_segment_idx: 0, playback_rate: 3.0, loop_enabled: false },
     });
     renderLayout();
-    expect(mockSetRate).toHaveBeenCalledWith(2.0);
+    expect(mockSetRate).toHaveBeenCalledWith(1.5);
   });
 
   it('test_resume_recompute_segment_falls_back_to_zero_if_no_segment_matches', () => {

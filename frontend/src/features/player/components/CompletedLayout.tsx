@@ -6,6 +6,7 @@ import { useSubtitleSync } from '../hooks/useSubtitleSync';
 import { useAutoPause } from '../hooks/useAutoPause';
 import { useLoopSegment } from '../hooks/useLoopSegment';
 import { usePlaybackRate } from '../hooks/usePlaybackRate';
+import { ALLOWED_RATES, type PlaybackRate } from '../lib/constants';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useVideoProgress } from '../hooks/useVideoProgress';
 import { useResumeOnce } from '../hooks/useResumeOnce';
@@ -42,13 +43,22 @@ export function CompletedLayout({ data, videoId }: Props) {
 
   const setLoopEnabled = useCallback((enabled: boolean) => setLoop(enabled), []);
 
+  // Snap arbitrary number from resume's clamp [0.5, 2.0] to the nearest
+  // ALLOWED_RATES value so usePlaybackRate's strict literal union accepts it.
+  const setRateFromResume = useCallback((n: number) => {
+    const closest = ALLOWED_RATES.reduce((a, b) =>
+      Math.abs(b - n) < Math.abs(a - n) ? b : a,
+    );
+    setRate(closest);
+  }, [setRate]);
+
   const { restoredRef, showToast, toastMeta, dismissToast } = useResumeOnce(
     progress,
     isReady,
     segments,
-    data.duration_sec,
+    data.duration_sec ?? undefined,
     seekTo,
-    setRate,
+    setRateFromResume,
     setLoopEnabled,
   );
 
@@ -100,7 +110,7 @@ export function CompletedLayout({ data, videoId }: Props) {
   }, [progress, restoredRef]);
 
   const handleSetRate = useCallback(
-    (newRate: number) => {
+    (newRate: PlaybackRate) => {
       setRate(newRate);
       if (restoredRef.current) progress.save({ playback_rate: newRate });
     },
