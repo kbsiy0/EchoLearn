@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { formatPlayedAt, formatSegmentLabel } from '../lib/format';
 
+const TOAST_AUTO_DISMISS_MS = 5000;
+
 interface ResumeToastProps {
   playedAtSec: number;
   segmentIdx: number;
@@ -25,7 +27,7 @@ export function ResumeToast({
       if (!handledRef.current) {
         onDismiss();
       }
-    }, 5000);
+    }, TOAST_AUTO_DISMISS_MS);
     return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally empty — timer fires once on mount

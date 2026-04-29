@@ -47,7 +47,7 @@ export function useResumeOnce(
   progress: UseVideoProgressResult,
   isReady: boolean,
   segments: SubtitleResponse['segments'],
-  durationSec: number | undefined,
+  durationSec: number | null | undefined,
   seekTo: (sec: number) => void,
   setRate: (rate: number) => void,
   setLoop: (enabled: boolean) => void,

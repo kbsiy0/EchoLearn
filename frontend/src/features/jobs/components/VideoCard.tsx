@@ -15,13 +15,11 @@ export function VideoCard({ summary, onClick, onReset }: VideoCardProps) {
   const durationLabel = `${Math.floor(duration_sec / 60)}分${Math.floor(duration_sec % 60)}秒`;
   const dateLabel = new Date(created_at).toLocaleDateString('zh-TW');
 
-  const widthPct = progress
-    ? `${(Math.min(1, Math.max(0, progress.last_played_sec / duration_sec)) * 100).toFixed(1)}%`
-    : '0.0%';
-
-  const progressPct = progress
-    ? Math.round(Math.min(1, Math.max(0, progress.last_played_sec / duration_sec)) * 100)
+  const ratio = progress
+    ? Math.min(1, Math.max(0, progress.last_played_sec / duration_sec))
     : 0;
+  const widthPct = `${(ratio * 100).toFixed(1)}%`;
+  const progressPct = Math.round(ratio * 100);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter') {

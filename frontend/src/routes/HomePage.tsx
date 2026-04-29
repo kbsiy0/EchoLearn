@@ -56,9 +56,10 @@ export function HomePage() {
 
   const handleReset = useCallback(async (videoId: string): Promise<void> => {
     await deleteProgress(videoId);
-    // Refetch after successful DELETE; on failure keep local state (gate-(1) M8).
-    // fetchVideos returns null on non-2xx, throws only on network error — both
-    // count as "refetch failed" for the staleness contract.
+    // Refetch after successful DELETE; on failure keep local state (DELETE
+    // already succeeded server-side, only the refresh failed). fetchVideos
+    // returns null on non-2xx, throws only on network error — both count as
+    // "refetch failed" for the staleness contract.
     let data: VideoSummary[] | null;
     try {
       data = await fetchVideos();

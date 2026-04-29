@@ -1,5 +1,6 @@
 import type { VideoProgress } from '../types/subtitle';
 import { API_BASE } from './base';
+import { throwTypedError } from './errors';
 
 // URL pattern (all three functions):
 //   `${API_BASE}/videos/${videoId}/progress`
@@ -18,17 +19,28 @@ export interface VideoProgressIn {
   loop_enabled: boolean;
 }
 
-export async function putProgress(videoId: string, body: VideoProgressIn): Promise<void> {
+export interface PutProgressOptions {
+  /**
+   * Set true on the unload-flush path (visibilitychange=hidden / beforeunload
+   * / unmount). Adds `keepalive: true` so the browser does not cancel the
+   * in-flight PUT when the tab closes — crash-survivability gate.
+   */
+  unload?: boolean;
+}
+
+export async function putProgress(
+  videoId: string,
+  body: VideoProgressIn,
+  options: PutProgressOptions = {},
+): Promise<void> {
   const res = await fetch(`${API_BASE}/videos/${videoId}/progress`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    keepalive: options.unload === true,
   });
   if (res.status === 204) return;
-  const parsed = await res.json().catch(() => ({})) as Record<string, string>;
-  const code = parsed.error_code ?? '';
-  const msg = parsed.error_message ?? `HTTP ${res.status}`;
-  throw new Error(`${code}: ${msg}`);
+  await throwTypedError(res);
 }
 
 export async function deleteProgress(videoId: string): Promise<void> {
@@ -36,8 +48,5 @@ export async function deleteProgress(videoId: string): Promise<void> {
     method: 'DELETE',
   });
   if (res.status === 204) return;
-  const parsed = await res.json().catch(() => ({})) as Record<string, string>;
-  const code = parsed.error_code ?? '';
-  const msg = parsed.error_message ?? `HTTP ${res.status}`;
-  throw new Error(`${code}: ${msg}`);
+  await throwTypedError(res);
 }
