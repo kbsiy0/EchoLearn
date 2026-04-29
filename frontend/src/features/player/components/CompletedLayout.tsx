@@ -6,7 +6,7 @@ import { useSubtitleSync } from '../hooks/useSubtitleSync';
 import { useAutoPause } from '../hooks/useAutoPause';
 import { useLoopSegment } from '../hooks/useLoopSegment';
 import { usePlaybackRate } from '../hooks/usePlaybackRate';
-import { ALLOWED_RATES, type PlaybackRate } from '../lib/constants';
+import { snapToAllowedRate, type PlaybackRate } from '../lib/constants';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useVideoProgress } from '../hooks/useVideoProgress';
 import { useResumeOnce } from '../hooks/useResumeOnce';
@@ -40,23 +40,23 @@ export function CompletedLayout({ data, videoId }: Props) {
   const { rate, setRate, stepUp, stepDown } = usePlaybackRate(player, isReady);
 
   const progress = useVideoProgress(videoId);
+  const { save: saveProgress } = progress;
 
   const setLoopEnabled = useCallback((enabled: boolean) => setLoop(enabled), []);
 
-  // Snap arbitrary number from resume's clamp [0.5, 2.0] to the nearest
-  // ALLOWED_RATES value so usePlaybackRate's strict literal union accepts it.
-  const setRateFromResume = useCallback((n: number) => {
-    const closest = ALLOWED_RATES.reduce((a, b) =>
-      Math.abs(b - n) < Math.abs(a - n) ? b : a,
-    );
-    setRate(closest);
-  }, [setRate]);
+  // Adapter: useResumeOnce calls setRate(rate: number) with values that may
+  // fall outside the strict ALLOWED_RATES literal union (resume clamp range
+  // is wider than the player's allowed rates). Snap before passing through.
+  const setRateFromResume = useCallback(
+    (n: number) => setRate(snapToAllowedRate(n)),
+    [setRate],
+  );
 
   const { restoredRef, showToast, toastMeta, dismissToast } = useResumeOnce(
     progress,
     isReady,
     segments,
-    data.duration_sec ?? undefined,
+    data.duration_sec,
     seekTo,
     setRateFromResume,
     setLoopEnabled,
@@ -70,14 +70,14 @@ export function CompletedLayout({ data, videoId }: Props) {
     if (!restoredRef.current) return;
     if (playerState === 2 && prev !== 2) {
       const currentTime = player?.getCurrentTime() ?? 0;
-      progress.save({
+      saveProgress({
         last_played_sec: currentTime,
         last_segment_idx: currentIndex,
         playback_rate: rate,
         loop_enabled: loop,
       });
     }
-  }, [playerState, player, currentIndex, rate, loop, progress, restoredRef]);
+  }, [playerState, player, currentIndex, rate, loop, saveProgress, restoredRef]);
 
   const isPlaying = playerState === 1;
 
@@ -87,10 +87,10 @@ export function CompletedLayout({ data, videoId }: Props) {
       seekTo(segments[idx].start);
       playVideo();
       if (restoredRef.current) {
-        progress.save({ last_played_sec: segments[idx].start, last_segment_idx: idx });
+        saveProgress({ last_played_sec: segments[idx].start, last_segment_idx: idx });
       }
     },
-    [segments, seekTo, playVideo, progress, restoredRef],
+    [segments, seekTo, playVideo, saveProgress, restoredRef],
   );
 
   const handlePrev = useCallback(() => goToSegment(currentIndex - 1), [goToSegment, currentIndex]);
@@ -104,17 +104,17 @@ export function CompletedLayout({ data, videoId }: Props) {
   const handleToggleLoop = useCallback(() => {
     setLoop((v) => {
       const next = !v;
-      if (restoredRef.current) progress.save({ loop_enabled: next });
+      if (restoredRef.current) saveProgress({ loop_enabled: next });
       return next;
     });
-  }, [progress, restoredRef]);
+  }, [saveProgress, restoredRef]);
 
   const handleSetRate = useCallback(
     (newRate: PlaybackRate) => {
       setRate(newRate);
-      if (restoredRef.current) progress.save({ playback_rate: newRate });
+      if (restoredRef.current) saveProgress({ playback_rate: newRate });
     },
-    [setRate, progress, restoredRef],
+    [setRate, saveProgress, restoredRef],
   );
 
   useKeyboardShortcuts({

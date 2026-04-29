@@ -9,7 +9,7 @@
  *   reset()→ immediate DELETE; resolves on 204, rejects on error
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { VideoProgress } from '../../../types/subtitle';
 import {
   getProgress,
@@ -17,6 +17,8 @@ import {
   deleteProgress,
   type VideoProgressIn,
 } from '../../../api/progress';
+
+const SAVE_DEBOUNCE_MS = 1000;
 
 const DEFAULTS: VideoProgressIn = {
   last_played_sec: 0,
@@ -76,8 +78,9 @@ export function useVideoProgress(
     }
     if (videoId === null) return;
     const body = buildMerged(diff);
-    // fire-and-forget
-    void putProgress(videoId, body);
+    // fire-and-forget; `unload: true` adds fetch keepalive so the browser
+    // doesn't cancel the PUT if the tab is closing during the flush.
+    void putProgress(videoId, body, { unload: true });
   }, [videoId, buildMerged]);
 
   // ---- main effect: load + listeners + cleanup ---------------------------
@@ -149,7 +152,7 @@ export function useVideoProgress(
         pendingDiffRef.current = null;
         const body = buildMerged(diff);
         void putProgress(videoId, body);
-      }, 1000);
+      }, SAVE_DEBOUNCE_MS);
     },
     [videoId, buildMerged],
   );
@@ -170,5 +173,8 @@ export function useVideoProgress(
     valueRef.current = null;
   }, [videoId]);
 
-  return { value, loaded, save, reset };
+  return useMemo(
+    () => ({ value, loaded, save, reset }),
+    [value, loaded, save, reset],
+  );
 }
