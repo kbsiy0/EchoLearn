@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { SubtitleResponse } from '../../../types/subtitle';
 import { useYouTubePlayer } from '../hooks/useYouTubePlayer';
@@ -6,12 +6,16 @@ import { useSubtitleSync } from '../hooks/useSubtitleSync';
 import { useAutoPause } from '../hooks/useAutoPause';
 import { useLoopSegment } from '../hooks/useLoopSegment';
 import { usePlaybackRate } from '../hooks/usePlaybackRate';
+import { ALLOWED_RATES, type PlaybackRate } from '../lib/constants';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { useVideoProgress } from '../hooks/useVideoProgress';
+import { useResumeOnce } from '../hooks/useResumeOnce';
 import { computePlaybackFlags } from '../lib/flags';
 import { VideoPlayer } from './VideoPlayer';
 import { SubtitlePanel } from './SubtitlePanel';
 import { PlayerControls } from './PlayerControls';
 import { TitleBar } from './TitleBar';
+import { ResumeToast } from './ResumeToast';
 
 const PLAYER_CONTAINER_ID = 'yt-player';
 
@@ -35,6 +39,46 @@ export function CompletedLayout({ data, videoId }: Props) {
   useLoopSegment(player, segments, currentIndex, loopEnabled);
   const { rate, setRate, stepUp, stepDown } = usePlaybackRate(player, isReady);
 
+  const progress = useVideoProgress(videoId);
+
+  const setLoopEnabled = useCallback((enabled: boolean) => setLoop(enabled), []);
+
+  // Snap arbitrary number from resume's clamp [0.5, 2.0] to the nearest
+  // ALLOWED_RATES value so usePlaybackRate's strict literal union accepts it.
+  const setRateFromResume = useCallback((n: number) => {
+    const closest = ALLOWED_RATES.reduce((a, b) =>
+      Math.abs(b - n) < Math.abs(a - n) ? b : a,
+    );
+    setRate(closest);
+  }, [setRate]);
+
+  const { restoredRef, showToast, toastMeta, dismissToast } = useResumeOnce(
+    progress,
+    isReady,
+    segments,
+    data.duration_sec ?? undefined,
+    seekTo,
+    setRateFromResume,
+    setLoopEnabled,
+  );
+
+  // ── Pause detection: save on PAUSED (playerState=2) ─────────────────────
+  const prevPlayerStateRef = useRef<number>(-1);
+  useEffect(() => {
+    const prev = prevPlayerStateRef.current;
+    prevPlayerStateRef.current = playerState;
+    if (!restoredRef.current) return;
+    if (playerState === 2 && prev !== 2) {
+      const currentTime = player?.getCurrentTime() ?? 0;
+      progress.save({
+        last_played_sec: currentTime,
+        last_segment_idx: currentIndex,
+        playback_rate: rate,
+        loop_enabled: loop,
+      });
+    }
+  }, [playerState, player, currentIndex, rate, loop, progress, restoredRef]);
+
   const isPlaying = playerState === 1;
 
   const goToSegment = useCallback(
@@ -42,8 +86,11 @@ export function CompletedLayout({ data, videoId }: Props) {
       if (idx < 0 || idx >= segments.length) return;
       seekTo(segments[idx].start);
       playVideo();
+      if (restoredRef.current) {
+        progress.save({ last_played_sec: segments[idx].start, last_segment_idx: idx });
+      }
     },
-    [segments, seekTo, playVideo],
+    [segments, seekTo, playVideo, progress, restoredRef],
   );
 
   const handlePrev = useCallback(() => goToSegment(currentIndex - 1), [goToSegment, currentIndex]);
@@ -54,7 +101,21 @@ export function CompletedLayout({ data, videoId }: Props) {
     else playVideo();
   }, [isPlaying, playVideo, pauseVideo]);
   const handleClickSegment = useCallback((idx: number) => goToSegment(idx), [goToSegment]);
-  const handleToggleLoop = useCallback(() => setLoop((v) => !v), []);
+  const handleToggleLoop = useCallback(() => {
+    setLoop((v) => {
+      const next = !v;
+      if (restoredRef.current) progress.save({ loop_enabled: next });
+      return next;
+    });
+  }, [progress, restoredRef]);
+
+  const handleSetRate = useCallback(
+    (newRate: PlaybackRate) => {
+      setRate(newRate);
+      if (restoredRef.current) progress.save({ playback_rate: newRate });
+    },
+    [setRate, progress, restoredRef],
+  );
 
   useKeyboardShortcuts({
     onTogglePlay: handleTogglePlay,
@@ -65,6 +126,11 @@ export function CompletedLayout({ data, videoId }: Props) {
     onSpeedDown: stepDown,
     onSpeedUp: stepUp,
   });
+
+  const handleToastRestart = useCallback(() => {
+    seekTo(0);
+    dismissToast();
+  }, [seekTo, dismissToast]);
 
   return (
     <>
@@ -101,9 +167,17 @@ export function CompletedLayout({ data, videoId }: Props) {
             currentIndex={currentIndex}
             totalSegments={segments.length}
             rate={rate}
-            onSetRate={setRate}
+            onSetRate={handleSetRate}
           />
         </div>
+      )}
+      {showToast && toastMeta && (
+        <ResumeToast
+          playedAtSec={toastMeta.playedAtSec}
+          segmentIdx={toastMeta.segmentIdx}
+          onDismiss={dismissToast}
+          onRestart={handleToastRestart}
+        />
       )}
     </>
   );

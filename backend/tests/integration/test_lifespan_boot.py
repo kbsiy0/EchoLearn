@@ -157,3 +157,125 @@ class TestLifespanStartupRunsWithoutError:
             # This is what lifespan calls — must not raise
             runner.startup_sweep()
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# T01 — video_progress table smoke tests
+# ---------------------------------------------------------------------------
+
+class TestVideoProgressSchema:
+    """T01: video_progress table and index created correctly on bootstrap."""
+
+    def test_video_progress_table_exists_after_boot(self):
+        """video_progress table is created by the schema bootstrap."""
+        from app.db.connection import get_connection
+        conn = get_connection(":memory:")
+        try:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='video_progress'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None, "video_progress table must exist after bootstrap"
+
+    def test_video_progress_index_exists_after_boot(self):
+        """idx_progress_updated_at index is created by the schema bootstrap."""
+        from app.db.connection import get_connection
+        conn = get_connection(":memory:")
+        try:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_progress_updated_at'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None, "idx_progress_updated_at index must exist after bootstrap"
+
+    def test_idx_progress_updated_at_is_desc(self):
+        """PRAGMA index_xinfo shows desc=1 for the updated_at column."""
+        from app.db.connection import get_connection
+        conn = get_connection(":memory:")
+        try:
+            rows = conn.execute(
+                "PRAGMA index_xinfo('idx_progress_updated_at')"
+            ).fetchall()
+        finally:
+            conn.close()
+        # index_xinfo columns: (seqno, cid, name, desc, coll, key)
+        updated_at_row = next((r for r in rows if r[2] == "updated_at"), None)
+        assert updated_at_row is not None, "updated_at column must be present in index"
+        assert updated_at_row[3] == 1, "updated_at must be indexed DESC (desc=1)"
+
+    def test_video_progress_columns_match_schema(self):
+        """PRAGMA table_info shows correct column names and types."""
+        from app.db.connection import get_connection
+        conn = get_connection(":memory:")
+        try:
+            rows = conn.execute("PRAGMA table_info(video_progress)").fetchall()
+        finally:
+            conn.close()
+        # table_info columns: (cid, name, type, notnull, dflt_value, pk)
+        col_map = {r[1]: r[2].upper() for r in rows}
+        expected = {
+            "video_id": "TEXT",
+            "last_played_sec": "REAL",
+            "last_segment_idx": "INTEGER",
+            "playback_rate": "REAL",
+            "loop_enabled": "INTEGER",
+            "updated_at": "TEXT",
+        }
+        for col, typ in expected.items():
+            assert col in col_map, f"column '{col}' must exist in video_progress"
+            assert col_map[col] == typ, f"column '{col}' must be type {typ}, got {col_map[col]}"
+
+    def test_video_progress_fk_cascades_on_video_delete(self):
+        """Deleting a videos row removes the linked video_progress row (CASCADE)."""
+        from app.db.connection import get_connection
+        conn = get_connection(":memory:")
+        try:
+            conn.execute(
+                "INSERT INTO videos (video_id, title, duration_sec, source, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("vid_cascade", "Test Video", 120.0, "youtube", "2026-04-28T00:00:00+00:00"),
+            )
+            conn.execute(
+                "INSERT INTO video_progress "
+                "(video_id, last_played_sec, last_segment_idx, playback_rate, loop_enabled, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("vid_cascade", 10.5, 2, 1.0, 0, "2026-04-28T00:00:00+00:00"),
+            )
+            conn.commit()
+            conn.execute("DELETE FROM videos WHERE video_id = ?", ("vid_cascade",))
+            conn.commit()
+            count = conn.execute(
+                "SELECT count(*) FROM video_progress WHERE video_id = ?", ("vid_cascade",)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 0, "CASCADE should remove video_progress row when videos row is deleted"
+
+    def test_video_progress_primary_key_collision_on_duplicate_insert(self):
+        """Inserting two rows with the same video_id raises IntegrityError."""
+        from app.db.connection import get_connection
+        conn = get_connection(":memory:")
+        try:
+            conn.execute(
+                "INSERT INTO videos (video_id, title, duration_sec, source, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("vid_pk", "PK Test", 60.0, "youtube", "2026-04-28T00:00:00+00:00"),
+            )
+            conn.execute(
+                "INSERT INTO video_progress "
+                "(video_id, last_played_sec, last_segment_idx, playback_rate, loop_enabled, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("vid_pk", 5.0, 0, 1.0, 0, "2026-04-28T00:00:00+00:00"),
+            )
+            conn.commit()
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO video_progress "
+                    "(video_id, last_played_sec, last_segment_idx, playback_rate, loop_enabled, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    ("vid_pk", 8.0, 1, 1.5, 1, "2026-04-28T01:00:00+00:00"),
+                )
+        finally:
+            conn.close()
