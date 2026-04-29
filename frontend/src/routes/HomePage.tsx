@@ -2,9 +2,17 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE } from '../api/base';
 import { createJob } from '../api/subtitles';
+import { deleteProgress } from '../api/progress';
 import { extractVideoId } from '../lib/youtube';
 import { URLInput } from '../features/jobs/components/URLInput';
+import { VideoCard } from '../features/jobs/components/VideoCard';
 import type { VideoSummary } from '../types/subtitle';
+
+async function fetchVideos(): Promise<VideoSummary[] | null> {
+  const res = await fetch(`${API_BASE}/videos`);
+  if (!res.ok) return null;
+  return res.json() as Promise<VideoSummary[]>;
+}
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -14,8 +22,7 @@ export function HomePage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE}/videos`)
-      .then((res) => (res.ok ? res.json() : null))
+    fetchVideos()
       .then((data) => {
         if (!cancelled && data) setVideos(data);
       })
@@ -47,6 +54,24 @@ export function HomePage() {
     }
   }, [navigate]);
 
+  const handleReset = useCallback(async (videoId: string): Promise<void> => {
+    await deleteProgress(videoId);
+    // Refetch after successful DELETE; on failure keep local state (gate-(1) M8).
+    // fetchVideos returns null on non-2xx, throws only on network error — both
+    // count as "refetch failed" for the staleness contract.
+    let data: VideoSummary[] | null;
+    try {
+      data = await fetchVideos();
+    } catch {
+      data = null;
+    }
+    if (data) {
+      setVideos(data);
+    } else {
+      console.warn('HomePage: refetch after reset failed — keeping stale list');
+    }
+  }, []);
+
   return (
     <main className="flex-1 flex flex-col overflow-hidden">
       {/* URL input */}
@@ -65,16 +90,11 @@ export function HomePage() {
               <ul className="space-y-2">
                 {videos.map((v) => (
                   <li key={v.video_id}>
-                    <button
-                      onClick={() => navigate(`/watch/${v.video_id}`)}
-                      className="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
-                    >
-                      <p className="text-white text-sm font-medium truncate">{v.title}</p>
-                      <p className="text-gray-500 text-xs mt-0.5">
-                        {Math.floor(v.duration_sec / 60)}分{Math.floor(v.duration_sec % 60)}秒
-                        · {new Date(v.created_at).toLocaleDateString('zh-TW')}
-                      </p>
-                    </button>
+                    <VideoCard
+                      summary={v}
+                      onClick={(id) => navigate(`/watch/${id}`)}
+                      onReset={handleReset}
+                    />
                   </li>
                 ))}
               </ul>
