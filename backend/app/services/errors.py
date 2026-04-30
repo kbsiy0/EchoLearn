@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from enum import Enum
 
+from fastapi import HTTPException
+
 
 class ErrorCode(str, Enum):
     INVALID_URL = "INVALID_URL"
@@ -46,3 +48,15 @@ def safe_message(error_code: ErrorCode | str) -> str:
     `ErrorCode(str, Enum)` makes string-keyed lookups equal-by-value.
     """
     return SAFE_MESSAGES.get(error_code, SAFE_MESSAGES[ErrorCode.INTERNAL_ERROR])
+
+
+def http_error(status_code: int, code: ErrorCode, message: str) -> HTTPException:
+    """Build the canonical `{error_code, error_message}` envelope HTTPException.
+
+    `app/main.py`'s exception handler flattens `detail=dict` to the top-level
+    response body, so callers raising this get a uniform wire shape.
+    """
+    return HTTPException(
+        status_code=status_code,
+        detail={"error_code": code, "error_message": message},
+    )

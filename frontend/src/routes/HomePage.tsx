@@ -1,18 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { API_BASE } from '../api/base';
 import { createJob } from '../api/subtitles';
 import { deleteProgress } from '../api/progress';
+import { listVideos } from '../api/videos';
 import { extractVideoId } from '../lib/youtube';
 import { URLInput } from '../features/jobs/components/URLInput';
 import { VideoCard } from '../features/jobs/components/VideoCard';
 import type { VideoSummary } from '../types/subtitle';
-
-async function fetchVideos(): Promise<VideoSummary[] | null> {
-  const res = await fetch(`${API_BASE}/videos`);
-  if (!res.ok) return null;
-  return res.json() as Promise<VideoSummary[]>;
-}
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -22,7 +16,7 @@ export function HomePage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchVideos()
+    listVideos()
       .then((data) => {
         if (!cancelled && data) setVideos(data);
       })
@@ -57,12 +51,12 @@ export function HomePage() {
   const handleReset = useCallback(async (videoId: string): Promise<void> => {
     await deleteProgress(videoId);
     // Refetch after successful DELETE; on failure keep local state (DELETE
-    // already succeeded server-side, only the refresh failed). fetchVideos
+    // already succeeded server-side, only the refresh failed). listVideos
     // returns null on non-2xx, throws only on network error — both count as
     // "refetch failed" for the staleness contract.
     let data: VideoSummary[] | null;
     try {
-      data = await fetchVideos();
+      data = await listVideos();
     } catch {
       data = null;
     }

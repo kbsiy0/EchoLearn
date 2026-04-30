@@ -78,6 +78,9 @@ export function useVideoProgress(
     }
     if (videoId === null) return;
     const body = buildMerged(diff);
+    // Best-effort dedup: skip the PUT if the merged body equals the
+    // mount-time snapshot (covers pause→same-time→pause replay).
+    if (sameProgress(valueRef.current, body)) return;
     // fire-and-forget; `unload: true` adds fetch keepalive so the browser
     // doesn't cancel the PUT if the tab is closing during the flush.
     void putProgress(videoId, body, { unload: true });
@@ -151,6 +154,7 @@ export function useVideoProgress(
         const diff = pendingDiffRef.current;
         pendingDiffRef.current = null;
         const body = buildMerged(diff);
+        if (sameProgress(valueRef.current, body)) return;
         void putProgress(videoId, body);
       }, SAVE_DEBOUNCE_MS);
     },
@@ -176,5 +180,22 @@ export function useVideoProgress(
   return useMemo(
     () => ({ value, loaded, save, reset }),
     [value, loaded, save, reset],
+  );
+}
+
+/**
+ * Shallow-equality check on the four scalar progress fields.
+ * Returns false when prev is null (first save must always go through).
+ */
+function sameProgress(
+  prev: VideoProgress | null,
+  next: VideoProgressIn,
+): boolean {
+  if (prev === null) return false;
+  return (
+    prev.last_played_sec === next.last_played_sec &&
+    prev.last_segment_idx === next.last_segment_idx &&
+    prev.playback_rate === next.playback_rate &&
+    prev.loop_enabled === next.loop_enabled
   );
 }

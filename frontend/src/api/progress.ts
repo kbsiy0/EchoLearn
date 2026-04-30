@@ -8,7 +8,7 @@ import { throwTypedError } from './errors';
 export async function getProgress(videoId: string): Promise<VideoProgress | null> {
   const res = await fetch(`${API_BASE}/videos/${videoId}/progress`);
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Failed to fetch progress: ${res.status}`);
+  if (!res.ok) await throwTypedError(res);
   return res.json() as Promise<VideoProgress>;
 }
 

@@ -132,7 +132,9 @@ class JobRunner:
                 error_message=str(exc),
             )
 
-    def _fail_job(self, job_id: str, error_code: str, error_message: str) -> None:
+    def _fail_job(
+        self, job_id: str, error_code: ErrorCode | str, error_message: str
+    ) -> None:
         try:
             self._get_repo().update_status(
                 job_id, "failed",
