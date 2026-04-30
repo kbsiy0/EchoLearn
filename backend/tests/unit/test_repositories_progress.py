@@ -226,13 +226,13 @@ def test_upsert_rejects_rate_below_0_5():
                     playback_rate=0.49, loop_enabled=False)
 
 
-def test_upsert_rejects_rate_above_2_0():
+def test_upsert_rejects_rate_above_1_5():
     conn = _make_conn()
     _seed_video(conn)
     repo = _make_repo(conn)
     with pytest.raises(ValueError, match="playback_rate"):
         repo.upsert(VIDEO_ID, last_played_sec=0.0, last_segment_idx=0,
-                    playback_rate=2.01, loop_enabled=False)
+                    playback_rate=1.51, loop_enabled=False)
 
 
 def test_upsert_accepts_rate_at_exact_bounds():
@@ -243,7 +243,7 @@ def test_upsert_accepts_rate_at_exact_bounds():
     repo.upsert(VIDEO_ID, last_played_sec=0.0, last_segment_idx=0,
                 playback_rate=0.5, loop_enabled=False)
     repo.upsert(VIDEO_ID, last_played_sec=0.0, last_segment_idx=0,
-                playback_rate=2.0, loop_enabled=False)
+                playback_rate=1.5, loop_enabled=False)
 
 
 # ---------------------------------------------------------------------------

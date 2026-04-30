@@ -34,6 +34,10 @@ class ProgressRepo:
         if row is None:
             return None
 
+        # Server-side clamp invariant: last_played_sec is bounded by the
+        # video's duration. Mirrored on the frontend in
+        # `useResumeOnce` via `Math.max(0, Math.min(stored, duration))` for
+        # defense-in-depth (handles null duration + negative seconds).
         duration_sec = row["duration_sec"]
         stored_sec = row["last_played_sec"]
         clamped_sec = (
@@ -110,5 +114,9 @@ def _validate_progress_inputs(
         raise ValueError("last_played_sec must be >= 0")
     if last_segment_idx < 0:
         raise ValueError("last_segment_idx must be >= 0")
-    if not (0.5 <= playback_rate <= 2.0):
-        raise ValueError("playback_rate must be in [0.5, 2.0]")
+    # Range matches the player's ALLOWED_RATES constant in
+    # frontend/src/features/player/lib/constants.ts. Tightened from the
+    # earlier [0.5, 2.0] forward-compat range — no client ships values
+    # outside [0.5, 1.5] and the player physically cannot honor them.
+    if not (0.5 <= playback_rate <= 1.5):
+        raise ValueError("playback_rate must be in [0.5, 1.5]")

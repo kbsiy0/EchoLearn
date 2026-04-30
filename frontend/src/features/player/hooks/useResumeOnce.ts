@@ -13,8 +13,12 @@ import { useState, useRef, useEffect } from 'react';
 import type { SubtitleResponse } from '../../../types/subtitle';
 import type { UseVideoProgressResult } from './useVideoProgress';
 
+// Range matches backend progress_repo's playback_rate validation. Stored
+// values outside this range (legacy or corrupted) are clamped here, then
+// snapped to the player's ALLOWED_RATES literal union by CompletedLayout's
+// setRateFromResume adapter before reaching usePlaybackRate.setRate.
 const RATE_MIN = 0.5;
-const RATE_MAX = 2.0;
+const RATE_MAX = 1.5;
 
 /** Binary search: last segment whose start <= seekSec. Returns -1 if none. */
 function findSegmentIdx(
@@ -72,11 +76,14 @@ export function useResumeOnce(
 
     const { last_played_sec, playback_rate, loop_enabled } = progress.value;
 
-    // INV-OOB: clamp to [0, duration_sec]; never use raw stored last_segment_idx
+    // INV-OOB: clamp to [0, duration_sec]; never use raw stored last_segment_idx.
+    // Mirrors the server-side clamp in backend/app/repositories/progress_repo.py
+    // (`min(stored_sec, duration_sec)`); we add the lower bound 0 here as
+    // defense-in-depth against legacy / corrupt rows.
     const duration = durationSec ?? 0;
     const seekTarget = Math.min(Math.max(last_played_sec, 0), duration);
 
-    // Clamp rate to [0.5, 2.0]
+    // Clamp rate to [0.5, 1.5]
     const clampedRate = Math.min(Math.max(playback_rate, RATE_MIN), RATE_MAX);
 
     // Recompute idx via binary search (never index segments[] with stored idx)
