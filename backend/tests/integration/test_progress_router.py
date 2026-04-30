@@ -173,10 +173,10 @@ def test_put_400_when_rate_below_0_5(db_conn: sqlite3.Connection, client: TestCl
     assert "playback_rate" in body["error_message"]
 
 
-def test_put_400_when_rate_above_2_0(db_conn: sqlite3.Connection, client: TestClient):
+def test_put_400_when_rate_above_1_5(db_conn: sqlite3.Connection, client: TestClient):
     _seed_video(db_conn)
     resp = client.put(
-        f"/api/videos/{VIDEO_ID}/progress", json={**_VALID_BODY, "playback_rate": 2.5}
+        f"/api/videos/{VIDEO_ID}/progress", json={**_VALID_BODY, "playback_rate": 1.6}
     )
     assert resp.status_code == 400
     body = resp.json()

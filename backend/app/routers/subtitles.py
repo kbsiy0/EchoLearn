@@ -1,13 +1,11 @@
 """Subtitles router — GET /api/subtitles/{video_id}."""
 from __future__ import annotations
 
-import json
-
 from fastapi import APIRouter
 
 from app.db.connection import DbConn
 from app.models.schemas import Segment, SubtitleResponse, WordTiming
-from app.repositories.videos_repo import VideosRepo
+from app.repositories.videos_repo import VideosRepo, parse_words_json
 from app.services.errors import ErrorCode, http_error
 
 router = APIRouter(prefix="/api/subtitles", tags=["subtitles"])
@@ -31,7 +29,7 @@ def get_subtitles(video_id: str, conn: DbConn) -> SubtitleResponse:
             end=s["end_sec"],
             text_en=s["text_en"],
             text_zh=s["text_zh"],
-            words=[WordTiming(**w) for w in json.loads(s["words_json"] or "[]")],
+            words=[WordTiming(**w) for w in parse_words_json(s["words_json"])],
         )
         for s in view["segments"]
     ]

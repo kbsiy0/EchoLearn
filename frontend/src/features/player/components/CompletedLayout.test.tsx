@@ -334,10 +334,9 @@ describe('CompletedLayout — T11 integration', () => {
     expect(mockSetRate).toHaveBeenCalledWith(0.5);
   });
 
-  it('test_resume_clamps_playback_rate_above_2_0', () => {
-    // Spec design.md §13 says clamp to [0.5, 2.0], but the player's
-    // ALLOWED_RATES caps at 1.5 (Phase 1a constraint). CompletedLayout's
-    // setRateFromResume snaps the clamped 2.0 to the nearest allowed rate.
+  it('test_resume_clamps_playback_rate_above_1_5', () => {
+    // useResumeOnce clamps stored rate to [0.5, 1.5] (matches backend +
+    // ALLOWED_RATES); setRateFromResume then snaps to the nearest allowed.
     setupDefaultMocks({
       isReady: true,
       progressLoaded: true,

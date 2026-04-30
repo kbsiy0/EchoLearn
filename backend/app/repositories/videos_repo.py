@@ -7,6 +7,16 @@ from typing import Optional
 from ..db._helpers import validate_video_id, now_iso
 
 
+def dump_words(words: list[dict]) -> str:
+    """Serialize a segment's word list for SQLite storage."""
+    return json.dumps(words)
+
+
+def parse_words_json(raw: Optional[str]) -> list[dict]:
+    """Deserialize the `segments.words_json` column. Treats null/empty as []."""
+    return json.loads(raw or "[]")
+
+
 class VideosRepo:
     """Repository for `videos` and `segments` tables."""
 
@@ -64,7 +74,7 @@ class VideosRepo:
                 seg["end"],
                 seg["text_en"],
                 seg["text_zh"],
-                json.dumps(seg.get("words", [])),
+                dump_words(seg.get("words", [])),
             )
             for seg in segments
         ]
