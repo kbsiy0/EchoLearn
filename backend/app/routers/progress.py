@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from pydantic import ValidationError
 
@@ -11,7 +11,7 @@ from app.db.connection import DbConn
 from app.db._helpers import validate_video_id
 from app.models.schemas import VideoProgress, VideoProgressIn
 from app.repositories.progress_repo import ProgressRepo
-from app.services.errors import ErrorCode
+from app.services.errors import ErrorCode, http_error
 
 router = APIRouter(prefix="/api/videos", tags=["progress"])
 
@@ -21,10 +21,7 @@ def _resolve_video_id(video_id: str) -> None:
     try:
         validate_video_id(video_id)
     except ValueError:
-        raise HTTPException(
-            status_code=404,
-            detail={"error_code": ErrorCode.NOT_FOUND, "error_message": "invalid video_id"},
-        )
+        raise http_error(404, ErrorCode.NOT_FOUND, "invalid video_id")
 
 
 def _parse_body(raw: dict) -> VideoProgressIn:
@@ -35,10 +32,7 @@ def _parse_body(raw: dict) -> VideoProgressIn:
         err = exc.errors()[0]
         loc = err.get("loc", ())
         msg = f"{'.'.join(str(p) for p in loc)}: {err['msg']}" if loc else err["msg"]
-        raise HTTPException(
-            status_code=400,
-            detail={"error_code": ErrorCode.VALIDATION_ERROR, "error_message": msg},
-        )
+        raise http_error(400, ErrorCode.VALIDATION_ERROR, msg)
 
 
 @router.get("/{video_id}/progress")
@@ -46,10 +40,7 @@ def get_progress(video_id: str, conn: DbConn) -> VideoProgress:
     _resolve_video_id(video_id)
     row = ProgressRepo(conn).get(video_id)
     if row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error_code": ErrorCode.NOT_FOUND, "error_message": "progress not found"},
-        )
+        raise http_error(404, ErrorCode.NOT_FOUND, "progress not found")
     return VideoProgress(**row)
 
 
@@ -66,15 +57,9 @@ async def put_progress(video_id: str, request: Request, conn: DbConn) -> Respons
             loop_enabled=body.loop_enabled,
         )
     except sqlite3.IntegrityError:
-        raise HTTPException(
-            status_code=404,
-            detail={"error_code": ErrorCode.NOT_FOUND, "error_message": "video not found"},
-        )
+        raise http_error(404, ErrorCode.NOT_FOUND, "video not found")
     except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"error_code": ErrorCode.VALIDATION_ERROR, "error_message": str(exc)},
-        )
+        raise http_error(400, ErrorCode.VALIDATION_ERROR, str(exc))
     return Response(status_code=204)
 
 

@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import type { SubtitleResponse } from '../../../types/subtitle';
 import { getSubtitles } from '../../../api/subtitles';
 
+const POLL_INTERVAL_MS = 1000;
+
 /**
- * Polls `GET /subtitles/{videoId}` every 1000ms and stops automatically when
+ * Polls `GET /subtitles/{videoId}` every POLL_INTERVAL_MS and stops automatically when
  * the response status is "completed" or "failed" (terminal states).
  *
  * - videoId === null → no fetch, no interval (inert)
@@ -42,7 +44,7 @@ export function useSubtitleStream(videoId: string | null): {
     };
 
     tick();
-    intervalId = setInterval(tick, 1000);
+    intervalId = setInterval(tick, POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;

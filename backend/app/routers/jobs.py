@@ -5,7 +5,7 @@ import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, constr
 
@@ -13,7 +13,7 @@ from app.db.connection import DbConn
 from app.models.schemas import JobStatus
 from app.repositories.jobs_repo import JobsRepo
 from app.repositories.videos_repo import VideosRepo
-from app.services.errors import ErrorCode
+from app.services.errors import ErrorCode, http_error
 from app.services.url_validator import validate_youtube_url
 
 logger = logging.getLogger(__name__)
@@ -78,10 +78,7 @@ def create_job(body: CreateJobBody, conn: DbConn, runner: Runner):
         else:
             safe_msg = "Invalid YouTube URL"
         safe_msg = _strip_traceback_tokens(safe_msg)
-        raise HTTPException(
-            status_code=400,
-            detail={"error_code": ErrorCode.INVALID_URL, "error_message": safe_msg},
-        )
+        raise http_error(400, ErrorCode.INVALID_URL, safe_msg)
 
     jobs_repo = JobsRepo(conn)
     videos_repo = VideosRepo(conn)

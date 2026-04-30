@@ -117,7 +117,7 @@ class JobsRepo:
         self,
         job_id: str,
         status: Literal["queued", "processing", "completed", "failed"],
-        error_code: Optional[str] = None,
+        error_code: Optional[ErrorCode | str] = None,
         error_message: Optional[str] = None,
     ) -> None:
         """Update job status and optionally set error fields."""
