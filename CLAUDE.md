@@ -6,7 +6,7 @@ AI 語言學習 Web App：貼 YouTube URL → 產生中英雙語字幕 → 單�
 > 下一步候選：Phase 1 剩餘的段段串流顯示 → Phase 2（影片歷史、學習進度恢復）→ Phase 3（句子收藏 / 字卡、單字查詢）。
 > 重啟指標：`git log` + `openspec/archive/` 最新一期的 `proposal.md`「Out of scope」段。
 
-**與 user-level 分工**：SDD 框架（agent 職責、Tier / Gate、N-round checkpoint、git 工作流、Simplify 通則）定義在 `~/.claude/CLAUDE.md`，本檔只記 EchoLearn 特化。
+**與 user-level 分工**：工作分道（直做 / Micro / SDD-lite / SDD-full）、不可繞的 gate、N-round checkpoint、git 工作流、Simplify 通則定義在 `~/.claude/CLAUDE.md`，本檔只記 EchoLearn 特化。
 
 ## 技術棧
 
@@ -60,13 +60,17 @@ cd frontend && npm run lint && npm run build      # build = tsc -b && vite build
 cd frontend && npx vitest run                     # 一次性執行；npm test 在互動終端是 watch 模式
 ```
 
-## Tier 1 觸發（diff path 比對）
+## 分道觸發（diff path 機械比對；各道定義見 user-level）
 
-- `frontend/src/**`（非 `*.test.*`）——視覺路徑
-- `backend/app/models/schemas.py`、`backend/app/routers/**`——對外 API schema
-- `backend/app/services/alignment/**`、`frontend/src/features/player/hooks/useSubtitleSync.ts`——sync 精度（使用者唯一能直接感知的核心品質）
-
-前端行為類 task 另派 ui-verifier 量化驗證，報告寫 `docs/ui-verification/<task>.md`。
+- **SDD-full 觸發**（任一即中）：OpenAI key 與付費 API 呼叫，錯了會外洩 key 或重複扣費。
+  - `backend/app/config.py`（`OPENAI_API_KEY`）、`backend/app/services/transcription/whisper.py`、`backend/app/services/translation/translator.py`
+  - 清單是手維護的：新檔若讀 `OPENAI_API_KEY` 或呼叫 OpenAI，視同在清單內，並在同一 PR 補進來。
+- **persona-tester**：SDD-lite / SDD-full 的 diff 動到使用者看得到的路徑才派；直做 / Micro 與純後端改動不派。
+  - 視覺：`frontend/src/**`（非 `*.test.*`）
+  - 前端看得到的 API：`backend/app/models/schemas.py`、`backend/app/routers/**`
+  - 字幕同步精度（使用者唯一能直接感知的核心品質）：`backend/app/services/alignment/**`、`frontend/src/features/player/hooks/useSubtitleSync.ts`
+- 前端行為類 task 另派專案 agent `ui-verifier`（`.claude/agents/ui-verifier.md`）量化驗證，報告寫 `docs/ui-verification/<task>.md`。
+- **其餘改動**：新功能預設 SDD-lite；單根因小修走 Micro。
 
 ## Simplify（EchoLearn 特化）
 
