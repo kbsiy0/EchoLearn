@@ -28,3 +28,16 @@ CREATE TABLE IF NOT EXISTS segments (
   words_json TEXT NOT NULL,
   PRIMARY KEY (video_id, idx)
 );
+
+CREATE TABLE IF NOT EXISTS video_progress (
+  video_id          TEXT PRIMARY KEY,
+  last_played_sec   REAL NOT NULL,
+  last_segment_idx  INTEGER NOT NULL,
+  playback_rate     REAL NOT NULL,
+  loop_enabled      INTEGER NOT NULL,
+  updated_at        TEXT NOT NULL,
+  FOREIGN KEY (video_id) REFERENCES videos(video_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_progress_updated_at
+  ON video_progress(updated_at DESC);

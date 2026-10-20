@@ -27,18 +27,26 @@ export function extractVideoId(url: string): string | null {
  * Returns a promise that resolves when the API is ready.
  */
 export function loadYouTubeAPI(): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (window.YT && window.YT.Player) {
       resolve();
       return;
     }
 
-    // If the script is already loading, wait for callback
+    // If the script is already loading, wait for callback. 10s timeout so a
+    // failed CDN load (CSP block / offline) rejects rather than leaking the
+    // setInterval forever.
     if (document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+      let attempts = 0;
       const check = setInterval(() => {
         if (window.YT && window.YT.Player) {
           clearInterval(check);
           resolve();
+          return;
+        }
+        if (++attempts > 100) {
+          clearInterval(check);
+          reject(new Error('YouTube IFrame API timeout (10s)'));
         }
       }, 100);
       return;

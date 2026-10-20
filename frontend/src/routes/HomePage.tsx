@@ -1,63 +1,36 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createJob } from '../api/subtitles';
+import { deleteProgress } from '../api/progress';
+import { listVideos } from '../api/videos';
 import { extractVideoId } from '../lib/youtube';
-import { useJobPolling } from '../features/jobs/hooks/useJobPolling';
 import { URLInput } from '../features/jobs/components/URLInput';
-import { LoadingSpinner } from '../features/player/components/LoadingSpinner';
-
-interface VideoSummary {
-  video_id: string;
-  title: string;
-  duration_sec: number;
-  created_at: string;
-}
-
-const API_BASE = 'http://localhost:8000/api';
+import { VideoCard } from '../features/jobs/components/VideoCard';
+import type { VideoSummary } from '../types/subtitle';
 
 export function HomePage() {
   const navigate = useNavigate();
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [pendingVideoId, setPendingVideoId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [videos, setVideos] = useState<VideoSummary[]>([]);
 
-  const { job } = useJobPolling(jobId);
-
-  // Navigate when job completes
   useEffect(() => {
-    if (job?.status === 'completed' && pendingVideoId) {
-      navigate(`/watch/${pendingVideoId}`);
-    }
-    if (job?.status === 'failed') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setError(job.error_message || '處理失敗');
-      setLoading(false);
-      setJobId(null);
-    }
-  }, [job, pendingVideoId, navigate]);
-
-  // Fetch video history
-  const fetchVideos = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/videos`);
-      if (res.ok) setVideos(await res.json());
-    } catch {
-      // silently ignore history fetch errors
-    }
+    let cancelled = false;
+    listVideos()
+      .then((data) => {
+        if (!cancelled && data) setVideos(data);
+      })
+      .catch(() => {
+        // silently ignore history fetch errors
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchVideos();
-  }, [fetchVideos]);
 
   const handleSubmit = useCallback(async (url: string) => {
     setError(null);
     setLoading(true);
-    setJobId(null);
-    setPendingVideoId(null);
 
     const vid = extractVideoId(url);
     if (!vid) {
@@ -68,26 +41,31 @@ export function HomePage() {
 
     try {
       const result = await createJob(url);
-      setPendingVideoId(result.video_id);
-
-      if (result.cached || result.status === 'completed') {
-        navigate(`/watch/${result.video_id}`);
-        return;
-      }
-
-      if (result.job_id) {
-        setJobId(result.job_id);
-      }
+      navigate(`/watch/${result.video_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : '請求失敗');
       setLoading(false);
     }
   }, [navigate]);
 
-  const progressText =
-    job?.status === 'queued' ? '排隊中...' :
-    job?.status === 'processing' ? `處理中 (${job.progress}%)...` :
-    '提交中...';
+  const handleReset = useCallback(async (videoId: string): Promise<void> => {
+    await deleteProgress(videoId);
+    // Refetch after successful DELETE; on failure keep local state (DELETE
+    // already succeeded server-side, only the refresh failed). listVideos
+    // returns null on non-2xx, throws only on network error — both count as
+    // "refetch failed" for the staleness contract.
+    let data: VideoSummary[] | null;
+    try {
+      data = await listVideos();
+    } catch {
+      data = null;
+    }
+    if (data) {
+      setVideos(data);
+    } else {
+      console.warn('HomePage: refetch after reset failed — keeping stale list');
+    }
+  }, []);
 
   return (
     <main className="flex-1 flex flex-col overflow-hidden">
@@ -96,8 +74,6 @@ export function HomePage() {
         <URLInput onSubmit={handleSubmit} disabled={loading} />
         {error && <p className="mt-2 text-red-400 text-sm">{error}</p>}
       </div>
-
-      {loading && <LoadingSpinner progress={job?.progress ?? 0} status={progressText} />}
 
       {!loading && (
         <div className="flex-1 overflow-y-auto p-6">
@@ -109,16 +85,11 @@ export function HomePage() {
               <ul className="space-y-2">
                 {videos.map((v) => (
                   <li key={v.video_id}>
-                    <button
-                      onClick={() => navigate(`/watch/${v.video_id}`)}
-                      className="w-full text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
-                    >
-                      <p className="text-white text-sm font-medium truncate">{v.title}</p>
-                      <p className="text-gray-500 text-xs mt-0.5">
-                        {Math.floor(v.duration_sec / 60)}分{Math.floor(v.duration_sec % 60)}秒
-                        · {new Date(v.created_at).toLocaleDateString('zh-TW')}
-                      </p>
-                    </button>
+                    <VideoCard
+                      summary={v}
+                      onClick={(id) => navigate(`/watch/${id}`)}
+                      onReset={handleReset}
+                    />
                   </li>
                 ))}
               </ul>

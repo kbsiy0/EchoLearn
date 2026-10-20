@@ -1,17 +1,12 @@
 import { memo } from 'react';
 import type { Segment } from '../hooks/useSubtitleSync';
+import { formatPlayedAt } from '../lib/format';
 
 interface SubtitleLineProps {
   segment: Segment;
   isActive: boolean;
   currentWordIndex: number;
   onClick: () => void;
-}
-
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 export const SubtitleLine = memo(function SubtitleLine({
@@ -29,7 +24,7 @@ export const SubtitleLine = memo(function SubtitleLine({
           : 'hover:bg-gray-700/50 border-l-2 border-transparent'
       }`}
     >
-      <span className="text-xs text-gray-500 mr-2 font-mono">{formatTime(segment.start)}</span>
+      <span className="text-xs text-gray-500 mr-2 font-mono">{formatPlayedAt(segment.start)}</span>
       <p className="text-sm leading-relaxed">
         {isActive && segment.words && segment.words.length > 0
           ? segment.words.map((w, i) => {

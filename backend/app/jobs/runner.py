@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from app.repositories.jobs_repo import JobsRepo
+from app.services.errors import ErrorCode
 from app.services.transcription.youtube_audio import PipelineError
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ class JobRunner:
             are swept to ``failed`` on startup (default 60.0 seconds).
         jobs_repo: Injectable JobsRepo for unit/integration tests.
             If None, a real repo is constructed from the production DB
-            connection on first use (lazy — T05 wiring).
+            connection on first use.
         pipeline_run_fn: Callable(job_id) that executes the pipeline.
             Defaults to the module-level ``pipeline.run`` function.
         audio_dir: Directory containing downloaded audio files. Defaults to
@@ -127,11 +128,13 @@ class JobRunner:
             )
             self._fail_job(
                 job_id,
-                error_code="INTERNAL_ERROR",
+                error_code=ErrorCode.INTERNAL_ERROR,
                 error_message=str(exc),
             )
 
-    def _fail_job(self, job_id: str, error_code: str, error_message: str) -> None:
+    def _fail_job(
+        self, job_id: str, error_code: ErrorCode | str, error_message: str
+    ) -> None:
         try:
             self._get_repo().update_status(
                 job_id, "failed",
@@ -146,7 +149,7 @@ class JobRunner:
     def _get_repo(self) -> JobsRepo:
         if self._jobs_repo is not None:
             return self._jobs_repo
-        # Lazy production path (used by T05 router wiring)
+        # Lazy production path
         from app.db.connection import get_connection
         return JobsRepo(get_connection())
 

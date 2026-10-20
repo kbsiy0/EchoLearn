@@ -2,8 +2,8 @@
 
 AI 語言學習 Web App：貼 YouTube URL → 產生中英雙語字幕 → 單句精準對齊播放。
 
-> **狀態（2026-10-05）**：Phase 0（Whisper-only 重構，PR #1）、Phase 1a（循環播放 + 變速，PR #4）已完成並 archive 至 `openspec/archive/`。
-> 下一步候選：Phase 1 剩餘的段段串流顯示 → Phase 2（影片歷史、學習進度恢復）→ Phase 3（句子收藏 / 字卡、單字查詢）。
+> **狀態（2026-10-20）**：Phase 0（PR #1）、1a 循環播放與變速（PR #4）、1b 段段串流（PR #7）、2 影片歷史與學習進度恢復（PR #12）已完成並 archive 至 `openspec/archive/`；之後三輪 simplify / refactor（#13–#15）。
+> 下一步候選：Phase 3（句子收藏 / 字卡、單字查詢）。
 > 重啟指標：`git log` + `openspec/archive/` 最新一期的 `proposal.md`「Out of scope」段。
 
 **與 user-level 分工**：工作分道（直做 / Micro / SDD-lite / SDD-full）、不可繞的 gate、N-round checkpoint、git 工作流、Simplify 通則定義在 `~/.claude/CLAUDE.md`，本檔只記 EchoLearn 特化。

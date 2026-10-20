@@ -195,3 +195,39 @@ class TestVideoIdRegex:
     def test_create_rejects_bad_video_id(self, db_conn, bad_id):
         with pytest.raises(Exception):
             _make_repo(db_conn).create("job-bad-001", bad_id)
+
+
+# ---------------------------------------------------------------------------
+# T06: update_progress is status-guarded (design §8 invariant 11)
+# ---------------------------------------------------------------------------
+
+class TestUpdateProgressStatusGuard:
+    def test_update_progress_noop_on_failed_status(self, db_conn, monkeypatch):
+        """update_progress MUST be a no-op when job status is 'failed'."""
+        # Disable strict mode so update_progress doesn't raise on apparent lowering
+        monkeypatch.delenv("EL_TEST_STRICT", raising=False)
+        repo = _make_repo(db_conn)
+        _create(repo)
+        repo.update_progress(JOB_ID, 30)
+        repo.update_status(JOB_ID, "failed",
+                           error_code="WHISPER_ERROR",
+                           error_message="transcription failed")
+        # Now attempt to advance progress on a failed job
+        repo.update_progress(JOB_ID, 80)
+        job = repo.get(JOB_ID)
+        assert job["progress"] == 30, (
+            "update_progress must not advance progress on a failed job"
+        )
+
+    def test_update_progress_noop_on_completed_status(self, db_conn, monkeypatch):
+        """update_progress MUST be a no-op when job status is 'completed'."""
+        monkeypatch.delenv("EL_TEST_STRICT", raising=False)
+        repo = _make_repo(db_conn)
+        _create(repo)
+        repo.update_progress(JOB_ID, 100)
+        repo.update_status(JOB_ID, "completed")
+        # Attempt to re-advance (e.g. late-arriving callback)
+        repo.update_progress(JOB_ID, 100)  # same value — still must be a no-op query
+        job = repo.get(JOB_ID)
+        assert job["status"] == "completed"
+        assert job["progress"] == 100

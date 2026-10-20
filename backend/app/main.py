@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.jobs.runner import JobRunner
 from app.routers import jobs as jobs_router
+from app.routers import progress as progress_router
 from app.routers import subtitles as subtitles_router
 from app.routers import videos as videos_router
 
@@ -32,6 +33,7 @@ app.add_middleware(
 )
 
 app.include_router(jobs_router.router)
+app.include_router(progress_router.router)
 app.include_router(subtitles_router.router)
 app.include_router(videos_router.router)
 

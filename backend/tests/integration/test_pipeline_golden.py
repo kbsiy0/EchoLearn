@@ -1,4 +1,7 @@
-"""Integration tests — pipeline golden path and progress verification."""
+"""Integration tests — pipeline golden path and progress verification.
+
+Migrated for T06: uses subprocess.run mock (no real ffmpeg) and new repo API.
+"""
 
 import uuid
 from pathlib import Path
@@ -27,7 +30,7 @@ def fake_probe(url: str) -> VideoMetadata:
     return VideoMetadata(
         video_id=VIDEO_ID,
         title="Rick Astley",
-        duration_sec=212.0,
+        duration_sec=45.0,  # short video → single chunk, no real ffmpeg needed
         source="whisper",
     )
 
@@ -62,7 +65,8 @@ def _create_job(db_conn, video_id: str = VIDEO_ID) -> str:
 # Golden path
 # ---------------------------------------------------------------------------
 
-def test_golden_path_completes(db_conn, tmp_path):
+def test_golden_path_completes(db_conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("subprocess.run", MagicMock())
     whisper = FakeWhisperClient(words=WORDS)
     translator = FakeTranslator(mapping={"Never gonna give you": "永遠不會放棄你"})
 
@@ -77,7 +81,8 @@ def test_golden_path_completes(db_conn, tmp_path):
     assert job["error_code"] is None
 
 
-def test_golden_path_videos_row_written(db_conn, tmp_path):
+def test_golden_path_videos_row_written(db_conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("subprocess.run", MagicMock())
     whisper = FakeWhisperClient(words=WORDS)
     translator = FakeTranslator(mapping={})
 
@@ -88,10 +93,11 @@ def test_golden_path_videos_row_written(db_conn, tmp_path):
     video = videos_repo.get_video(VIDEO_ID)
     assert video is not None
     assert video["title"] == "Rick Astley"
-    assert video["duration_sec"] == 212.0
+    assert video["duration_sec"] == 45.0
 
 
-def test_golden_path_segments_written_in_order(db_conn, tmp_path):
+def test_golden_path_segments_written_in_order(db_conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("subprocess.run", MagicMock())
     whisper = FakeWhisperClient(words=WORDS)
     translator = FakeTranslator(mapping={})
 
@@ -104,7 +110,8 @@ def test_golden_path_segments_written_in_order(db_conn, tmp_path):
         assert seg["idx"] == i
 
 
-def test_golden_path_audio_deleted(db_conn, tmp_path):
+def test_golden_path_audio_deleted(db_conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("subprocess.run", MagicMock())
     audio = tmp_path / f"{VIDEO_ID}.mp3"
     audio.write_bytes(b"fake")
 
@@ -130,7 +137,8 @@ def test_golden_path_audio_deleted(db_conn, tmp_path):
 # Progress ladder
 # ---------------------------------------------------------------------------
 
-def test_progress_reaches_100_on_success(db_conn, tmp_path):
+def test_progress_reaches_100_on_success(db_conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("subprocess.run", MagicMock())
     whisper = FakeWhisperClient(words=WORDS)
     translator = FakeTranslator(mapping={})
 

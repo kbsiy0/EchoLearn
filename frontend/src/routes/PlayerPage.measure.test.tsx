@@ -6,15 +6,21 @@
  * 2. With ?measure=1, useAutoPause is called with enabled=false
  *
  * Strategy: vi.mock() useAutoPause to spy on the enabled argument;
+ * mock useSubtitleStream to return a completed SubtitleResponse so that
+ * CompletedLayout renders and calls useAutoPause;
  * render PlayerPage via MemoryRouter with appropriate initialEntries.
- * Also mock all other hooks that make network/DOM calls to keep tests hermetic.
  */
 
 import { render } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import type { SubtitleResponse } from '../types/subtitle';
 
 // --- module mocks (must be at top level, before imports) ---
+
+vi.mock('../features/player/hooks/useSubtitleStream', () => ({
+  useSubtitleStream: vi.fn(),
+}));
 
 vi.mock('../features/player/hooks/useAutoPause', () => ({
   useAutoPause: vi.fn(),
@@ -48,15 +54,32 @@ vi.mock('../features/player/hooks/usePlaybackRate', () => ({
   ALLOWED_RATES: [0.5, 0.75, 1, 1.25, 1.5],
 }));
 
-vi.mock('../api/subtitles', () => ({
-  getSubtitles: vi.fn(() => new Promise(() => {})), // never resolves → stays in loading state
-}));
-
 // Import after mocks
+import { useSubtitleStream } from '../features/player/hooks/useSubtitleStream';
 import { useAutoPause } from '../features/player/hooks/useAutoPause';
 import { PlayerPage } from './PlayerPage';
 
 // ---
+
+const COMPLETED_DATA: SubtitleResponse = {
+  video_id: 'abc',
+  status: 'completed',
+  progress: 100,
+  title: 'Test Video',
+  duration_sec: 60,
+  segments: [
+    {
+      idx: 0,
+      start: 0,
+      end: 5,
+      text_en: 'Hello',
+      text_zh: '你好',
+      words: [{ text: 'Hello', start: 0, end: 2 }],
+    },
+  ],
+  error_code: null,
+  error_message: null,
+};
 
 function renderPlayerPage(path: string) {
   render(
@@ -71,6 +94,8 @@ function renderPlayerPage(path: string) {
 describe('PlayerPage ?measure=1 flag', () => {
   beforeEach(() => {
     vi.mocked(useAutoPause).mockClear();
+    // Return completed data so CompletedLayout renders and useAutoPause is called
+    vi.mocked(useSubtitleStream).mockReturnValue({ data: COMPLETED_DATA, error: null });
   });
 
   it('passes enabled=true to useAutoPause when ?measure=1 is absent', () => {

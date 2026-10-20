@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import re
 from urllib.parse import urlparse, parse_qs
 
+from app.db._helpers import VIDEO_ID_RE
+
 ALLOWED_HOSTS = {"youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com"}
-VIDEO_ID_REGEX = r"^[a-zA-Z0-9_-]{11}$"
 
 
 def validate_youtube_url(url: str) -> str:
@@ -61,7 +61,7 @@ def validate_youtube_url(url: str) -> str:
     if not video_id:
         raise ValueError("INVALID_URL: Could not extract video ID from URL")
 
-    if not re.match(VIDEO_ID_REGEX, video_id):
+    if not VIDEO_ID_RE.match(video_id):
         raise ValueError(f"INVALID_URL: Video ID '{video_id}' is not valid")
 
     return video_id

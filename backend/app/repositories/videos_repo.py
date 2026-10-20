@@ -1,28 +1,20 @@
-"""Videos repository — CRUD for `videos` and `segments` tables.
-
-publish_video is the ONLY sanctioned write path for making a video observable.
-It executes as a single atomic transaction: either both the videos row and all
-segments rows are written, or neither is.
-"""
+"""Videos repository — CRUD for `videos` and `segments` tables."""
 
 import json
-import re
 import sqlite3
-from datetime import datetime, timezone
 from typing import Optional
 
-_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+from ..db._helpers import validate_video_id, now_iso
 
 
-def _validate_video_id(video_id: str) -> None:
-    if not _VIDEO_ID_RE.match(video_id):
-        raise ValueError(
-            f"Invalid video_id {video_id!r}: must match ^[A-Za-z0-9_-]{{11}}$"
-        )
+def dump_words(words: list[dict]) -> str:
+    """Serialize a segment's word list for SQLite storage."""
+    return json.dumps(words)
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def parse_words_json(raw: Optional[str]) -> list[dict]:
+    """Deserialize the `segments.words_json` column. Treats null/empty as []."""
+    return json.loads(raw or "[]")
 
 
 class VideosRepo:
@@ -31,30 +23,25 @@ class VideosRepo:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
-    # ------------------------------------------------------------------
-    # Atomic publish
-    # ------------------------------------------------------------------
-
-    def publish_video(
+    def upsert_video_clear_segments(
         self,
         video_id: str,
         title: str,
         duration_sec: float,
         source: str,
-        segments: list,
     ) -> None:
-        """Atomically upsert the videos row and replace all segment rows.
+        """Called once per pipeline run, after probe, before any chunk runs.
 
-        Executes in a single SQLite transaction: if any step raises, the
-        whole transaction is rolled back — no partial state is observable.
+        Atomically:
+          1. Upsert videos row (title/duration/source).
+          2. DELETE FROM segments WHERE video_id=? (clean reprocess).
 
-        This is Option A from design.md: the only write path for videos/segments.
+        This resets partial state so a re-submit for the same video_id wipes
+        stale segments before new chunks start appending.
         """
-        _validate_video_id(video_id)
-        now = _now()
-
+        validate_video_id(video_id)
+        now = now_iso()
         with self._conn:
-            # Upsert videos row
             self._conn.execute(
                 """
                 INSERT INTO videos (video_id, title, duration_sec, source, created_at)
@@ -67,22 +54,18 @@ class VideosRepo:
                 """,
                 (video_id, title, duration_sec, source, now),
             )
-
-            # Delete existing segments (clean reprocess)
             self._conn.execute(
                 "DELETE FROM segments WHERE video_id=?", (video_id,)
             )
 
-            # Insert all segments — extracted for testability
-            self._insert_segments(self._conn, video_id, segments)
+    def append_segments(self, video_id: str, segments: list[dict]) -> None:
+        """Called once per successful chunk to append rows atomically.
 
-    def _insert_segments(
-        self,
-        conn: sqlite3.Connection,
-        video_id: str,
-        segments: list,
-    ) -> None:
-        """Insert segment rows — separated to allow failure injection in tests."""
+        Caller is responsible for assigning monotone idx values that do not
+        collide with already-appended segments. Raises on idx collision
+        (enforced by PK (video_id, idx)).
+        """
+        validate_video_id(video_id)
         rows = [
             (
                 video_id,
@@ -91,43 +74,118 @@ class VideosRepo:
                 seg["end"],
                 seg["text_en"],
                 seg["text_zh"],
-                json.dumps(seg["words"]),
+                dump_words(seg.get("words", [])),
             )
             for seg in segments
         ]
-        conn.executemany(
-            """
-            INSERT INTO segments
-                (video_id, idx, start_sec, end_sec, text_en, text_zh, words_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
+        with self._conn:
+            self._conn.executemany(
+                """
+                INSERT INTO segments
+                    (video_id, idx, start_sec, end_sec, text_en, text_zh, words_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
 
-    # ------------------------------------------------------------------
-    # Read methods
-    # ------------------------------------------------------------------
+    def get_video_view(self, video_id: str) -> Optional[dict]:
+        """Aggregate read: latest job + videos row + all segments.
+
+        Returns None if no job for video_id was ever submitted.
+        Otherwise returns a dict whose outer keys align exactly with
+        SubtitleResponse pydantic field names, so the router body reduces
+        to SubtitleResponse(**view). Inner segments list holds ORM dicts.
+
+        Wraps the three SELECTs in BEGIN DEFERRED / COMMIT so WAL-mode
+        concurrency cannot tear the snapshot across the three tables.
+        """
+        validate_video_id(video_id)
+        self._conn.execute("BEGIN DEFERRED")
+        try:
+            job_row = self._conn.execute(
+                "SELECT * FROM jobs WHERE video_id=? ORDER BY created_at DESC LIMIT 1",
+                (video_id,),
+            ).fetchone()
+
+            video_row = self._conn.execute(
+                "SELECT * FROM videos WHERE video_id=?",
+                (video_id,),
+            ).fetchone()
+
+            segment_rows = self._conn.execute(
+                "SELECT * FROM segments WHERE video_id=? ORDER BY idx ASC",
+                (video_id,),
+            ).fetchall()
+
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
+        if job_row is None:
+            return None
+
+        return _assemble_view(job_row, video_row, segment_rows)
 
     def get_video(self, video_id: str) -> Optional[sqlite3.Row]:
         """Return the videos row or None."""
-        _validate_video_id(video_id)
+        validate_video_id(video_id)
         cursor = self._conn.execute(
             "SELECT * FROM videos WHERE video_id=?", (video_id,)
         )
         return cursor.fetchone()
 
-    def list_videos(self) -> list:
-        """Return all videos ordered by created_at DESC."""
+    def list_videos(self) -> list[dict]:
+        """Return all videos with optional progress, sorted per design.md §12.
+
+        Uses a LEFT JOIN so videos with no progress row still appear.
+        Three-clause ORDER BY:
+          1. (p.updated_at IS NULL) ASC  → has-progress group (0) before no-progress group (1)
+          2. p.updated_at DESC           → most-recently-played first within has-progress group
+          3. v.created_at DESC           → newest-created first within no-progress group
+                                           (also serves as tiebreaker for equal updated_at)
+
+        Returns list[dict] — each dict carries both videos columns and the
+        joined progress columns (prefixed; None when no progress row exists).
+        The router is responsible for shaping into Pydantic models.
+        """
         cursor = self._conn.execute(
-            "SELECT * FROM videos ORDER BY created_at DESC"
+            """
+            SELECT v.video_id, v.title, v.duration_sec, v.source, v.created_at,
+                   p.last_played_sec, p.last_segment_idx, p.playback_rate,
+                   p.loop_enabled, p.updated_at AS progress_updated_at
+            FROM videos v
+            LEFT JOIN video_progress p USING (video_id)
+            ORDER BY (p.updated_at IS NULL) ASC,
+                     p.updated_at DESC,
+                     v.created_at DESC
+            """
         )
-        return cursor.fetchall()
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_segments(self, video_id: str) -> list:
         """Return segments for video_id ordered by idx ASC."""
-        _validate_video_id(video_id)
+        validate_video_id(video_id)
         cursor = self._conn.execute(
             "SELECT * FROM segments WHERE video_id=? ORDER BY idx ASC",
             (video_id,),
         )
         return cursor.fetchall()
+
+
+def _assemble_view(job_row, video_row, segment_rows) -> dict:
+    """Build the get_video_view result dict from ORM rows.
+
+    Outer keys match SubtitleResponse field names; inner segments use ORM keys
+    (start_sec, end_sec, words_json) for the router to convert to Segment pydantic.
+    """
+    return {
+        "video_id": job_row["video_id"],
+        "status": job_row["status"],
+        "progress": job_row["progress"],
+        "title": video_row["title"] if video_row else None,
+        "duration_sec": video_row["duration_sec"] if video_row else None,
+        "segments": [dict(r) for r in segment_rows],
+        "error_code": job_row["error_code"],
+        "error_message": job_row["error_message"],
+    }

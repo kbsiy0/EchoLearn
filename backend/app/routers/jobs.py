@@ -1,19 +1,19 @@
-"""Jobs router — POST /api/subtitles/jobs, GET /api/subtitles/jobs/{job_id}."""
+"""Jobs router — POST /api/subtitles/jobs."""
 from __future__ import annotations
 
 import logging
-import sqlite3
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, constr
 
-from app.db.connection import get_connection
+from app.db.connection import DbConn
 from app.models.schemas import JobStatus
 from app.repositories.jobs_repo import JobsRepo
 from app.repositories.videos_repo import VideosRepo
+from app.services.errors import ErrorCode, http_error
 from app.services.url_validator import validate_youtube_url
 
 logger = logging.getLogger(__name__)
@@ -29,19 +29,10 @@ class CreateJobBody(BaseModel):
     url: constr(max_length=2048)  # type: ignore[valid-type]
 
 
-# ---------------------------------------------------------------------------
-# Dependencies
-# ---------------------------------------------------------------------------
-
-def get_db_conn() -> sqlite3.Connection:
-    return get_connection()
-
-
 def get_runner(request: Request) -> Any:
     return request.app.state.runner
 
 
-DbConn = Annotated[sqlite3.Connection, Depends(get_db_conn)]
 Runner = Annotated[Any, Depends(get_runner)]
 
 
@@ -49,7 +40,7 @@ Runner = Annotated[Any, Depends(get_runner)]
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _safe_error_message(raw: str) -> str:
+def _strip_traceback_tokens(raw: str) -> str:
     """Strip anything that looks like a Python stack trace or exception repr."""
     forbidden = ("Traceback", 'File "', "ValueError", "Exception", "Error(")
     for token in forbidden:
@@ -86,11 +77,8 @@ def create_job(body: CreateJobBody, conn: DbConn, runner: Runner):
             safe_msg = raw_msg[len("INVALID_URL:"):].strip()
         else:
             safe_msg = "Invalid YouTube URL"
-        safe_msg = _safe_error_message(safe_msg)
-        raise HTTPException(
-            status_code=400,
-            detail={"error_code": "INVALID_URL", "error_message": safe_msg},
-        )
+        safe_msg = _strip_traceback_tokens(safe_msg)
+        raise http_error(400, ErrorCode.INVALID_URL, safe_msg)
 
     jobs_repo = JobsRepo(conn)
     videos_repo = VideosRepo(conn)
@@ -133,15 +121,3 @@ def create_job(body: CreateJobBody, conn: DbConn, runner: Runner):
     )
 
 
-# ---------------------------------------------------------------------------
-# GET /api/subtitles/jobs/{job_id}
-# ---------------------------------------------------------------------------
-
-@router.get("/jobs/{job_id}")
-def get_job(job_id: str, conn: DbConn):
-    """Return job status by job_id."""
-    repo = JobsRepo(conn)
-    row = repo.get(job_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return _row_to_job_status(row)

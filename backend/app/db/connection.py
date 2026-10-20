@@ -12,7 +12,9 @@ routers, services, and repositories all go through here.
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
+
+from fastapi import Depends
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 _DB_PATH = Path(__file__).parent.parent.parent / "data" / "echolearn.db"
@@ -60,3 +62,11 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
             _initialized_paths.add(resolved_str)
 
     return conn
+
+
+def get_db_conn() -> sqlite3.Connection:
+    """FastAPI dependency: hand each request a sqlite3.Connection."""
+    return get_connection()
+
+
+DbConn = Annotated[sqlite3.Connection, Depends(get_db_conn)]
